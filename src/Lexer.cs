@@ -33,13 +33,10 @@ public readonly struct Token
     public int Start { get; }
     public int Length { get; }
     public ReadOnlyMemory<Trivia> Leading { get; }
-    public ReadOnlyMemory<Trivia> Trailing { get; }
     public string Lexeme(Lexer lexer) => lexer._src[Start..(Start + Length)];
 
-    public Token(TokenKind kind, int start, int length,
-                ReadOnlyMemory<Trivia> leading = default,
-                ReadOnlyMemory<Trivia> trailing = default)
-    { Kind = kind; Start = start; Length = length; Leading = leading; Trailing = trailing; }
+    public Token(TokenKind kind, int start, int length, ReadOnlyMemory<Trivia> leading)
+    { Kind = kind; Start = start; Length = length; Leading = leading; }
 }
 
 public sealed class Lexer
