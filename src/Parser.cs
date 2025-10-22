@@ -1,163 +1,6 @@
-using System.ComponentModel.DataAnnotations;
 
 namespace MiniC
 {
-    // --- Lexing ---
-
-    public enum TokenKind
-    {
-        EOF, Identifier, IntLiteral, FloatLiteral, DoubleLiteral, Dot,
-        Return, If, Else, While,
-        LParen, RParen, LBrace, RBrace, Comma, Semicolon,
-        Plus, Minus, Star, Slash, Bang,
-        Amp, // '&'
-        Assign, // '='
-        Eq, Neq, Lt, Gt, Le, Ge,
-        AndAnd, OrOr, For,
-        PlusPlus, MinusMinus,
-        Break, Continue,
-        Extern, String,
-        Null,
-        Typedef, Struct,
-    }
-
-    public readonly record struct Token(TokenKind Kind, string Lexeme, int Pos);
-
-    public sealed class Lexer
-    {
-        private readonly string _src;
-        private int _i;
-
-        public Lexer(string src) { _src = src; }
-        private char Peek(int k = 0) => _i + k < _src.Length ? _src[_i + k] : '\0';
-        private char Next() => _i < _src.Length ? _src[_i++] : '\0';
-        private bool Match(char c) { if (Peek() == c) { _i++; return true; } return false; }
-
-        private Token ScanNumber(int start, bool startedWithDot)
-        {
-            bool haveDigits = !startedWithDot;
-
-            if (!startedWithDot)
-            {
-                while (char.IsDigit(Peek())) { Next(); haveDigits = true; }
-            }
-
-            bool hasDot = false;
-            if (Peek() == '.')
-            {
-                hasDot = true; Next();
-                while (char.IsDigit(Peek())) { Next(); haveDigits = true; }
-            }
-
-            bool hasExp = false;
-            if (Peek() is 'e' or 'E')
-            {
-                int save = _i;
-                Next();
-                if (Peek() is '+' or '-') Next();
-                if (char.IsDigit(Peek()))
-                {
-                    hasExp = true;
-                    while (char.IsDigit(Peek())) Next();
-                }
-                else
-                {
-                    // rollback if it's not a real exponent
-                    _i = save;
-                }
-            }
-
-            bool hasSuffix = false;
-            if (Peek() is 'f' or 'F') { hasSuffix = true; Next(); }
-
-            if (!haveDigits)
-            {
-                // not a valid number; backtrack to just the dot token
-                _i = start + 1;
-                return new(TokenKind.Dot, ".", start);
-            }
-    
-            string lex = _src.Substring(start, _i - start);
-
-
-            // classify
-            if (hasDot || hasExp || hasSuffix || startedWithDot)
-                return new(TokenKind.FloatLiteral, lex, start);
-
-            return new(TokenKind.IntLiteral, lex, start);
-        }
-
-        public Token NextToken()
-        {
-            // skip whitespace & // comments (simple)
-            for (; ; )
-            {
-                while (char.IsWhiteSpace(Peek())) _i++;
-                if (Peek() == '/' && Peek(1) == '/')
-                { while (Peek() != '\n' && Peek() != '\0') _i++; continue; }
-                break;
-            }
-            int start = _i;
-            char c = Next();
-            switch (c)
-            {
-                case '\0': return new(TokenKind.EOF, "", start);
-                case '(': return new(TokenKind.LParen, "(", start);
-                case ')': return new(TokenKind.RParen, ")", start);
-                case '{': return new(TokenKind.LBrace, "{", start);
-                case '}': return new(TokenKind.RBrace, "}", start);
-                case ',': return new(TokenKind.Comma, ",", start);
-                case ';': return new(TokenKind.Semicolon, ";", start);
-                case '+':
-                    if (Match('+')) return new(TokenKind.PlusPlus, "++", start);
-                    return new(TokenKind.Plus, "+", start);
-                case '-':
-                    if (Match('-')) return new(TokenKind.MinusMinus, "--", start);
-                    return new(TokenKind.Minus, "-", start);
-                case '*': return new(TokenKind.Star, "*", start);
-                case '/': return new(TokenKind.Slash, "/", start);
-                case '!': return Match('=') ? new(TokenKind.Neq, "!=", start) : new(TokenKind.Bang, "!", start);
-                case '&': return Match('&') ? new(TokenKind.AndAnd, "&&", start) : new(TokenKind.Amp, "&", start);
-                case '|': if (Match('|')) return new(TokenKind.OrOr, "||", start); break;
-                case '=': return Match('=') ? new(TokenKind.Eq, "==", start) : new(TokenKind.Assign, "=", start);
-                case '<': return Match('=') ? new(TokenKind.Le, "<=", start) : new(TokenKind.Lt, "<", start);
-                case '>': return Match('=') ? new(TokenKind.Ge, ">=", start) : new(TokenKind.Gt, ">", start);
-                case '"':
-                    while (Peek() != '"' && Peek() != '\0') Next();
-                    if (Peek() == '\0') throw new Exception("Unterminated string");
-                    Next();
-                    string s = _src.Substring(start + 1, _i - start - 2);
-                    return new(TokenKind.String, s, start);
-            }
-            if (char.IsDigit(c) || c == '.')
-            {
-                return ScanNumber(start, c == '.');
-            }
-            if (char.IsLetter(c) || c == '_')
-            {
-                while (char.IsLetterOrDigit(Peek()) || Peek() == '_') Next();
-                string id = _src.Substring(start, _i - start);
-                return id switch
-                {
-                    "extern" => new(TokenKind.Extern, id, start),
-                    "return" => new(TokenKind.Return, id, start),
-                    "if" => new(TokenKind.If, id, start),
-                    "else" => new(TokenKind.Else, id, start),
-                    "while" => new(TokenKind.While, id, start),
-                    "for" => new(TokenKind.For, id, start),
-                    "break" => new(TokenKind.Break, id, start),
-                    "continue" => new(TokenKind.Continue, id, start),
-                    "NULL" => new(TokenKind.Null, id, start),
-                    "typedef" => new(TokenKind.Typedef, id, start),
-                    "struct"  => new(TokenKind.Struct, id, start),
-                    _ => new(TokenKind.Identifier, id, start)
-                };
-
-            }
-            throw new Exception($"Unexpected character '{c}' at {start}");
-        }
-    }
-
     // --- AST ---
 
     public abstract record Node(int Pos);
@@ -240,7 +83,7 @@ namespace MiniC
         private Token Eat(TokenKind k)
         {
             if (!Check(k))
-                throw new Exception($"Expected {k} but found {LA(0).Kind} at {LA(0).Pos}");
+                throw new Exception($"Expected {k} but found {LA(0).Kind} at {LA(0).Start}");
             return Consume();
         }
 
@@ -268,14 +111,14 @@ namespace MiniC
             if (Match(TokenKind.Struct))
             {
                 // struct <Identifier>
-                baseName = Eat(TokenKind.Identifier).Lexeme;
+                baseName = Eat(TokenKind.Identifier).Lexeme(_lx);
                 hasStruct = true;
             }
             else
             {
-                if (Check(TokenKind.Identifier) && (_typedefs.Contains(LA(0).Lexeme) || _structTags.Contains(LA(0).Lexeme)))
+                if (Check(TokenKind.Identifier) && (_typedefs.Contains(LA(0).Lexeme(_lx)) || _structTags.Contains(LA(0).Lexeme(_lx))))
                 {
-                    baseName = Consume().Lexeme;
+                    baseName = Consume().Lexeme(_lx);
                 }
                 else
                 {
@@ -293,7 +136,7 @@ namespace MiniC
         {
             Eat(TokenKind.Typedef);
             var type = ParseTypeRef();
-            string newName = Eat(TokenKind.Identifier).Lexeme;
+            string newName = Eat(TokenKind.Identifier).Lexeme(_lx);
             Eat(TokenKind.Semicolon);
 
             _typedefs.Add(newName);
@@ -311,15 +154,15 @@ namespace MiniC
                 if (Match(TokenKind.LParen))
                 {
                     if (Check(TokenKind.Identifier))
-                        callConv = Eat(TokenKind.Identifier).Lexeme.ToLowerInvariant();
+                        callConv = Eat(TokenKind.Identifier).Lexeme(_lx).ToLowerInvariant();
                     Eat(TokenKind.RParen);
                 }
 
                 // extern "mylib.dll"
-                string dll = Eat(TokenKind.String).Lexeme;
+                string dll = Eat(TokenKind.String).Lexeme(_lx)[1..^1];
 
                 var ret = ParseTypeRef();
-                string name = Eat(TokenKind.Identifier).Lexeme;
+                string name = Eat(TokenKind.Identifier).Lexeme(_lx);
 
                 Eat(TokenKind.LParen);
                 var ps = new List<ParamDecl>();
@@ -328,7 +171,7 @@ namespace MiniC
                     do
                     {
                         var pt = ParseTypeRef();
-                        string pn = Eat(TokenKind.Identifier).Lexeme;
+                        string pn = Eat(TokenKind.Identifier).Lexeme(_lx);
                         ps.Add(new ParamDecl(pt!, pn, 0));
                     } while (Match(TokenKind.Comma));
 
@@ -346,7 +189,7 @@ namespace MiniC
             if (Check(TokenKind.Struct) && LA(1).Kind == TokenKind.Identifier && LA(2).Kind == TokenKind.Semicolon)
             {
                 Eat(TokenKind.Struct);
-                string tag = Eat(TokenKind.Identifier).Lexeme;
+                string tag = Eat(TokenKind.Identifier).Lexeme(_lx);
                 Eat(TokenKind.Semicolon);
                 _structTags.Add(tag);
                 return new OpaqueStructDecl(tag, 0);
@@ -354,7 +197,7 @@ namespace MiniC
 
             {
                 var type = ParseTypeRef();
-                string name = Eat(TokenKind.Identifier).Lexeme;
+                string name = Eat(TokenKind.Identifier).Lexeme(_lx);
 
                 if (Match(TokenKind.LParen))
                 {
@@ -365,7 +208,7 @@ namespace MiniC
                         do
                         {
                             var pt = ParseTypeRef();
-                            string pn = Eat(TokenKind.Identifier).Lexeme;
+                            string pn = Eat(TokenKind.Identifier).Lexeme(_lx);
                             ps.Add(new ParamDecl(pt!, pn, 0));
                         } while (Match(TokenKind.Comma));
                     }
@@ -383,7 +226,7 @@ namespace MiniC
                     decls.Add(new VarDecl(type!, name, init, 0));
                     while (Match(TokenKind.Comma))
                     {
-                        string n = Eat(TokenKind.Identifier).Lexeme;
+                        string n = Eat(TokenKind.Identifier).Lexeme(_lx);
                         Expr? i = null;
                         if (Match(TokenKind.Assign)) i = ParseAssignment();
                         decls.Add(new VarDecl(type!, n, i, 0));
@@ -433,7 +276,7 @@ namespace MiniC
                 var type = ParseTypeRef();
                 if (type != null)
                 {
-                    string n = Eat(TokenKind.Identifier).Lexeme;
+                    string n = Eat(TokenKind.Identifier).Lexeme(_lx);
                     Expr? init = null;
                     if (Match(TokenKind.Assign)) init = ParseAssignment();
                     initDecl = new VarDecl(type, n, init, 0);
@@ -477,7 +320,7 @@ namespace MiniC
                 var type = ParseTypeRef();
                 if (type!=null)
                 {
-                    string n = Eat(TokenKind.Identifier).Lexeme;
+                    string n = Eat(TokenKind.Identifier).Lexeme(_lx);
                     Expr? init = null;
                     if (Match(TokenKind.Assign)) init = ParseAssignment();
                     Eat(TokenKind.Semicolon);
@@ -567,7 +410,7 @@ namespace MiniC
                 var opTok = Consume();
                 var nextMin = rightAssoc ? bp : bp + 1;
                 var right = ParseBinary(nextMin);
-                left = new BinaryExpr(op, left, right, opTok.Pos);
+                left = new BinaryExpr(op, left, right, opTok.Start);
             }
             return left;
         }
@@ -624,39 +467,39 @@ namespace MiniC
         {
             if (Check(TokenKind.Null))
             {
-                return new NullExpr(Consume().Pos);
+                return new NullExpr(Consume().Start);
             }
             if (Check(TokenKind.String))
             {
                 var t = Consume();
-                return new StringExpr(t.Lexeme, t.Pos);
+                return new StringExpr(t.Lexeme(_lx)[1..^1], t.Start);
             }
             if (Check(TokenKind.IntLiteral))
             {
                 var t = Consume();
-                return new IntegerExpr(int.Parse(t.Lexeme), t.Pos);
+                return new IntegerExpr(int.Parse(t.Lexeme(_lx)), t.Start);
             }
             if (Check(TokenKind.FloatLiteral))
             {
                 var t = Consume();
 
-                string text = t.Lexeme.EndsWith("f", StringComparison.OrdinalIgnoreCase)
-                    ? t.Lexeme[..^1]
-                    : t.Lexeme;
+                string text = t.Lexeme(_lx).EndsWith("f", StringComparison.OrdinalIgnoreCase)
+                    ? t.Lexeme(_lx)[..^1]
+                    : t.Lexeme(_lx);
 
                 if (!double.TryParse(
                     text,
                     System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture,
                     out double val))
-                    throw new Exception($"Invalid float literal '{t.Lexeme}' at {t.Pos}");
+                    throw new Exception($"Invalid float literal '{t.Lexeme(_lx)}' at {t.Start}");
 
-                return new FloatExpr(val, t.Pos);
+                return new FloatExpr(val, t.Start);
             }
             if (Check(TokenKind.Identifier))
             {
                 var t = Consume();
-                return new IdentExpr(t.Lexeme, t.Pos);
+                return new IdentExpr(t.Lexeme(_lx), t.Start);
             }
             if (Match(TokenKind.LParen))
             {
@@ -664,7 +507,7 @@ namespace MiniC
                 Eat(TokenKind.RParen);
                 return e;
             }
-            throw new Exception($"Primary expression expected at {LA(0).Pos}:{LA(0).Lexeme}");
+            throw new Exception($"Primary expression expected at {LA(0).Start}:{LA(0).Lexeme(_lx)}");
         }
     }
 }
