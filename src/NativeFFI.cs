@@ -68,19 +68,29 @@ public sealed class NativeFunction
 
 public sealed class FfiBinder
 {
-    private static (Type ret, Type[] args) MapSignature(string retType, List<ParamDecl> ps)
+    private static (Type ret, Type[] args) MapSignature(TypeRef retType, List<ParamDecl> ps)
     {
-        Type Map(string t) => t switch
+        static Type Map(TypeRef type)
         {
-            "long" => typeof(long),
-            "int" => typeof(int),
-            "float" => typeof(float),
-            "double" => typeof(double),
-            "char" => typeof(string),
-            "void" => typeof(void),
-            _  => typeof(IntPtr),
-        };
-        return (Map(retType), ps.Select(p => Map(p.TypeName)).ToArray());
+            Type MapName(string t) => t switch
+            {
+                "long" => typeof(long),
+                "int" => typeof(int),
+                "float" => typeof(float),
+                "double" => typeof(double),
+                "char" => typeof(char),
+                "void" => typeof(void),
+                _ => typeof(IntPtr),
+            };
+            var csType = MapName(type.Name);
+            if (csType == typeof(char) && type.PointerDepth == 1)
+            {
+                csType = typeof(string);
+            }
+            return csType;
+        }
+
+        return (Map(retType), ps.Select(p => Map(p.Type)).ToArray());
     }
 
     public static NativeFunction Bind(ExternFuncDecl d)

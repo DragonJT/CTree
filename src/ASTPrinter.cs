@@ -53,10 +53,10 @@ namespace MiniC
             {
                 TranslationUnit _ => $"TranslationUnit{pos}",
                 FuncDef f         => $"FuncDef {f.RetType} {f.Name}{pos}",
-                ParamDecl p       => $"Param {p.TypeName} {p.Name}{pos}",
+                ParamDecl p       => $"Param {p.Type} {p.Name}{pos}",
                 VarDecl v         => v.Init is null
-                                        ? $"VarDecl {v.TypeName} {v.Name}{pos}"
-                                        : $"VarDecl {v.TypeName} {v.Name} = …{pos}",
+                                        ? $"VarDecl {v.Type} {v.Name}{pos}"
+                                        : $"VarDecl {v.Type} {v.Name} = …{pos}",
 
                 CompoundStmt _    => $"Block{pos}",
                 ReturnStmt r      => r.Expr is null ? $"Return{pos}" : $"Return …{pos}",

@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace MiniC
 {
     // --- Lexing ---
@@ -182,15 +184,20 @@ namespace MiniC
     public record WhileStmt(Expr Cond, Stmt Body, int P) : Stmt(P);
 
     public abstract record Decl(int Pos) : Node(Pos);
-    public record VarDecl(string TypeName, string Name, Expr? Init, int P) : Decl(P);
-    public record ParamDecl(string TypeName, string Name, int P) : Decl(P);
-    public record FuncDef(string RetType, string Name, List<ParamDecl> Params, CompoundStmt Body, int P) : Decl(P);
+    public record VarDecl(TypeRef Type, string Name, Expr? Init, int P) : Decl(P);
+    public record ParamDecl(TypeRef Type, string Name, int P) : Decl(P);
+    public record FuncDef(TypeRef RetType, string Name, List<ParamDecl> Params, CompoundStmt Body, int P) : Decl(P);
     public record TranslationUnit(List<Decl> Decls, int P) : Node(P);
-    public record TypedefDecl(string AliasedBase, int AliasedPtrDepth, string Name, int P) : Decl(P);
+    public record TypedefDecl(TypeRef Type, string Name, int P) : Decl(P);
     public record OpaqueStructDecl(string Tag, int P) : Decl(P);
 
-    public record ExternFuncDecl(string DllName, string RetType, string Name,
+    public record ExternFuncDecl(string DllName, TypeRef RetType, string Name,
         List<ParamDecl> Params, string? EntryPoint, string? CallConv, int P) : Decl(P);
+
+    public sealed record TypeRef(bool Struct, string Name, int PointerDepth = 0)
+    {
+        public override string ToString() => Struct?"struct ":"" + Name + new string('*', PointerDepth);
+    }
 
     public sealed class Parser
     {
@@ -241,8 +248,8 @@ namespace MiniC
         private Token T => LA(0);
 
         // ---- backtracking support ----
-        //private int Mark() => _idx;
-        //private void Reset(int mark) => _idx = mark;
+        private int Mark() => _idx;
+        private void Reset(int mark) => _idx = mark;
 
         public Parser(Lexer lx) { _lx = lx; LA(0); }
 
@@ -254,65 +261,46 @@ namespace MiniC
             return new TranslationUnit(decls, 0);
         }
 
-        private (string Base, int Ptr, bool IsStruct) ParseTypeRef()
+        private TypeRef? ParseTypeRef()
         {
             string baseName;
-            bool isStruct = false;
-
+            bool hasStruct = false;
             if (Match(TokenKind.Struct))
             {
-                isStruct = true;
-                var tag = Eat(TokenKind.Identifier).Lexeme;
-                // must be known, or accept forward usage (C allows using incomplete struct *)
-                // We'll allow it and rely on pointer usage.
-                baseName = tag;
+                // struct <Identifier>
+                baseName = Eat(TokenKind.Identifier).Lexeme;
+                hasStruct = true;
             }
             else
             {
-                baseName = MatchTypeSpecifier(); // builtin or typedef-name
+                if (Check(TokenKind.Identifier) && (_typedefs.Contains(LA(0).Lexeme) || _structTags.Contains(LA(0).Lexeme)))
+                {
+                    baseName = Consume().Lexeme;
+                }
+                else
+                {
+                    return null;
+                }
             }
 
-            int ptr = 0;
-            while (Match(TokenKind.Star)) ptr++;   // collect '*' after the base
+            int stars = 0;
+            while (Match(TokenKind.Star)) stars++;
 
-            return (baseName, ptr, isStruct);
+            return new TypeRef(hasStruct, baseName, stars);
         }
 
         private TypedefDecl ParseTypedefDecl()
         {
             Eat(TokenKind.Typedef);
-
-            // base (built-in, typedef-name, or 'struct <tag>')
-            string baseName;
-            int basePtr = 0;
-
-            if (Match(TokenKind.Struct))
-            {
-                var tag = Eat(TokenKind.Identifier).Lexeme;
-                baseName = $"struct {tag}";
-                // we allow pointers after the base (e.g., 'typedef struct X *PX;')
-                while (Match(TokenKind.Star)) basePtr++;
-                // forward-declare the tag too (for completeness)
-                _structTags.Add(tag);
-            }
-            else
-            {
-                baseName = MatchTypeSpecifier();
-                while (Match(TokenKind.Star)) basePtr++;
-            }
-
-            // New typedef name may itself have more '*' (C puts * on the declarator)
-            int extraPtr = 0;
-            while (Match(TokenKind.Star)) extraPtr++;
-
+            var type = ParseTypeRef();
             string newName = Eat(TokenKind.Identifier).Lexeme;
             Eat(TokenKind.Semicolon);
 
-            _typedefs.Add(newName); // now usable as a type name
+            _typedefs.Add(newName);
 
-            return new TypedefDecl(baseName, basePtr + extraPtr, newName, 0);
+            return new TypedefDecl(type!, newName, 0);
         }
-        
+
         private Decl ParseExternalDeclaration()
         {
             if (Match(TokenKind.Extern))
@@ -330,7 +318,7 @@ namespace MiniC
                 // extern "mylib.dll"
                 string dll = Eat(TokenKind.String).Lexeme;
 
-                string ret = MatchTypeSpecifier();
+                var ret = ParseTypeRef();
                 string name = Eat(TokenKind.Identifier).Lexeme;
 
                 Eat(TokenKind.LParen);
@@ -339,15 +327,15 @@ namespace MiniC
                 {
                     do
                     {
-                        string pt = MatchTypeSpecifier();
+                        var pt = ParseTypeRef();
                         string pn = Eat(TokenKind.Identifier).Lexeme;
-                        ps.Add(new ParamDecl(pt, pn, 0));
+                        ps.Add(new ParamDecl(pt!, pn, 0));
                     } while (Match(TokenKind.Comma));
 
                 }
                 Eat(TokenKind.RParen);
                 Eat(TokenKind.Semicolon);
-                return new ExternFuncDecl(dll, ret, name, ps, null, callConv, 0);
+                return new ExternFuncDecl(dll, ret!, name, ps, null, callConv, 0);
             }
             if (Check(TokenKind.Typedef))
             {
@@ -365,7 +353,7 @@ namespace MiniC
             }
 
             {
-                string type = MatchTypeSpecifier();
+                var type = ParseTypeRef();
                 string name = Eat(TokenKind.Identifier).Lexeme;
 
                 if (Match(TokenKind.LParen))
@@ -376,14 +364,14 @@ namespace MiniC
                     {
                         do
                         {
-                            string pt = MatchTypeSpecifier();
+                            var pt = ParseTypeRef();
                             string pn = Eat(TokenKind.Identifier).Lexeme;
-                            ps.Add(new ParamDecl(pt, pn, 0));
+                            ps.Add(new ParamDecl(pt!, pn, 0));
                         } while (Match(TokenKind.Comma));
                     }
                     Eat(TokenKind.RParen);
                     var body = ParseCompoundStmt();
-                    return new FuncDef(type, name, ps, body, 0);
+                    return new FuncDef(type!, name, ps, body, 0);
                 }
                 else
                 {
@@ -392,33 +380,19 @@ namespace MiniC
                     Expr? init = null;
                     if (Match(TokenKind.Assign))
                         init = ParseAssignment();
-                    decls.Add(new VarDecl(type, name, init, 0));
+                    decls.Add(new VarDecl(type!, name, init, 0));
                     while (Match(TokenKind.Comma))
                     {
                         string n = Eat(TokenKind.Identifier).Lexeme;
                         Expr? i = null;
                         if (Match(TokenKind.Assign)) i = ParseAssignment();
-                        decls.Add(new VarDecl(type, n, i, 0));
+                        decls.Add(new VarDecl(type!, n, i, 0));
                     }
                     Eat(TokenKind.Semicolon);
                     // For simplicity return just the first; in practice, split into separate Decl entries.
                     return decls[0];
                 }
             }
-        }
-
-        private string MatchTypeSpecifier()
-        {
-            if (Check(TokenKind.Identifier) && (_typedefs.Contains(LA(0).Lexeme) || _structTags.Contains(LA(0).Lexeme)))
-            {
-                return Consume().Lexeme;
-            }
-            throw new Exception($"Unexpected type {LA(0).Pos} {LA(0).Lexeme}");
-        }
-
-        private bool CheckTypeSpecifier()
-        {
-            return Check(TokenKind.Identifier) && (_typedefs.Contains(LA(0).Lexeme) || _structTags.Contains(LA(0).Lexeme));
         }
 
         private IfStmt ParseIfStatement()
@@ -455,18 +429,19 @@ namespace MiniC
 
             if (!Check(TokenKind.Semicolon))
             {
-                if (CheckTypeSpecifier())
+                int mark = Mark();
+                var type = ParseTypeRef();
+                if (type != null)
                 {
-                    // parse a simple 'type ident (= expr)? ;' declaration as init
-                    string t = MatchTypeSpecifier();
                     string n = Eat(TokenKind.Identifier).Lexeme;
                     Expr? init = null;
                     if (Match(TokenKind.Assign)) init = ParseAssignment();
-                    initDecl = new VarDecl(t, n, init, 0);
+                    initDecl = new VarDecl(type, n, init, 0);
                     Eat(TokenKind.Semicolon);
                 }
                 else
                 {
+                    Reset(mark);
                     initExpr = ParseExpression();
                     Eat(TokenKind.Semicolon);
                 }
@@ -498,18 +473,18 @@ namespace MiniC
             var items = new List<Node>();
             while (!Check(TokenKind.RBrace))
             {
-                // Lookahead: type → declaration; else statement
-                if (CheckTypeSpecifier())
+                int mark = Mark();
+                var type = ParseTypeRef();
+                if (type!=null)
                 {
-                    string t = MatchTypeSpecifier();
                     string n = Eat(TokenKind.Identifier).Lexeme;
                     Expr? init = null;
                     if (Match(TokenKind.Assign)) init = ParseAssignment();
                     Eat(TokenKind.Semicolon);
-                    items.Add(new VarDecl(t, n, init, 0));
+                    items.Add(new VarDecl(type, n, init, 0));
                     continue;
                 }
-
+                Reset(mark);
                 items.Add(ParseStatement());
             }
             Eat(TokenKind.RBrace);
@@ -651,7 +626,8 @@ namespace MiniC
             {
                 return new NullExpr(Consume().Pos);
             }
-            if (Check(TokenKind.String)) {
+            if (Check(TokenKind.String))
+            {
                 var t = Consume();
                 return new StringExpr(t.Lexeme, t.Pos);
             }
