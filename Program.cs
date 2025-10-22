@@ -11,12 +11,13 @@ int add(int a, int b) {
 }
 
 int main(int argc){
-    int x = 5;
+    long x = 5;
+    double y = 5.2;
     for(int i=0;i<10;i++){
         if (i == 3) continue;
         if (i == 7) break;
         print(i);
-        print(1.5f);
+        print(y + x);
     }
     return add(x,4);
 }

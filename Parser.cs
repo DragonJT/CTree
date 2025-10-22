@@ -4,8 +4,8 @@ namespace MiniC
 
     public enum TokenKind
     {
-        EOF, Identifier, IntLiteral, FloatLiteral, Dot,
-        Int, Char, Float,
+        EOF, Identifier, IntLiteral, FloatLiteral, DoubleLiteral, Dot,
+        Int, Char, Float, Double, Long,
         Return, If, Else, While,
         LParen, RParen, LBrace, RBrace, Comma, Semicolon,
         Plus, Minus, Star, Slash, Bang,
@@ -130,8 +130,10 @@ namespace MiniC
                 return id switch
                 {
                     "int" => new(TokenKind.Int, id, start),
+                    "long" => new(TokenKind.Long, id, start),
                     "char" => new(TokenKind.Char, id, start),
                     "float" => new(TokenKind.Float, id, start),
+                    "double" => new(TokenKind.Double, id, start),
                     "return" => new(TokenKind.Return, id, start),
                     "if" => new(TokenKind.If, id, start),
                     "else" => new(TokenKind.Else, id, start),
@@ -152,13 +154,13 @@ namespace MiniC
     public abstract record Node(int Pos);
 
     public abstract record Expr(int Pos) : Node(Pos);
-    public record IntegerExpr(int Value, int P) : Expr(P);
+    public record IntegerExpr(long Value, int P) : Expr(P);
     public record IdentExpr(string Name, int P) : Expr(P);
     public record UnaryExpr(string Op, Expr Expr, int P) : Expr(P);
     public record BinaryExpr(string Op, Expr Left, Expr Right, int P) : Expr(P);
     public record AssignExpr(Expr Left, Expr Right, int P) : Expr(P);
     public record CallExpr(Expr Callee, List<Expr> Args, int P) : Expr(P);
-    public record FloatExpr(float Value, int P) : Expr(P);
+    public record FloatExpr(double Value, int P) : Expr(P);
 
     public abstract record Stmt(int Pos) : Node(Pos);
     public record ExprStmt(Expr? Expr, int P) : Stmt(P);
@@ -202,7 +204,7 @@ namespace MiniC
 
         private Decl ParseExternalDeclaration()
         {
-            string type = ParseTypeSpecifier();
+            string type = MatchTypeSpecifier();
             string name = Eat(TokenKind.Identifier).Lexeme;
 
             if (Match(TokenKind.LParen))
@@ -213,7 +215,7 @@ namespace MiniC
                 {
                     do
                     {
-                        string pt = ParseTypeSpecifier();
+                        string pt = MatchTypeSpecifier();
                         string pn = Eat(TokenKind.Identifier).Lexeme;
                         ps.Add(new ParamDecl(pt, pn, 0));
                     } while (Match(TokenKind.Comma));
@@ -243,12 +245,24 @@ namespace MiniC
             }
         }
 
-        private string ParseTypeSpecifier()
+        private string? ParseTypeSpecifier(Func<TokenKind, bool> func)
         {
-            if (Match(TokenKind.Int)) return "int";
-            if (Match(TokenKind.Float)) return "float";
-            if (Match(TokenKind.Char)) return "char";
-            throw new Exception($"Type specifier expected at {_t.Pos}");
+            if (func(TokenKind.Int)) return "int";
+            if (func(TokenKind.Long)) return "long";
+            if (func(TokenKind.Float)) return "float";
+            if (func(TokenKind.Char)) return "char";
+            if (func(TokenKind.Double)) return "double";
+            return null;
+        }
+
+        private bool CheckTypeSpecifier()
+        {
+            return ParseTypeSpecifier(Check) != null;
+        }
+
+        private string MatchTypeSpecifier()
+        {
+            return ParseTypeSpecifier(Match) ?? throw new Exception($"Type specifier expected at {_t.Pos}");
         }
 
         private IfStmt ParseIfStatement()
@@ -276,10 +290,10 @@ namespace MiniC
 
             if (!Check(TokenKind.Semicolon))
             {
-                if (Check(TokenKind.Int) || Check(TokenKind.Char))
+                if (CheckTypeSpecifier())
                 {
                     // parse a simple 'type ident (= expr)? ;' declaration as init
-                    string t = ParseTypeSpecifier();
+                    string t = MatchTypeSpecifier();
                     string n = Eat(TokenKind.Identifier).Lexeme;
                     Expr? init = null;
                     if (Match(TokenKind.Assign)) init = ParseAssignment();
@@ -320,9 +334,9 @@ namespace MiniC
             while (!Check(TokenKind.RBrace))
             {
                 // Lookahead: type → declaration; else statement
-                if (Check(TokenKind.Int) || Check(TokenKind.Char))
+                if (CheckTypeSpecifier())
                 {
-                    string t = ParseTypeSpecifier();
+                    string t = MatchTypeSpecifier();
                     string n = Eat(TokenKind.Identifier).Lexeme;
                     Expr? init = null;
                     if (Match(TokenKind.Assign)) init = ParseAssignment();
@@ -481,11 +495,11 @@ namespace MiniC
                     ? t.Lexeme[..^1]
                     : t.Lexeme;
 
-                if (!float.TryParse(
+                if (!double.TryParse(
                     text,
                     System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture,
-                    out float val))
+                    out double val))
                     throw new Exception($"Invalid float literal '{t.Lexeme}' at {t.Pos}");
 
                 return new FloatExpr(val, t.Pos);
