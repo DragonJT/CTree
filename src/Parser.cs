@@ -43,14 +43,9 @@ public sealed record TypeRef(bool Struct, string Name, int PointerDepth = 0)
     public override string ToString() => Struct?"struct ":"" + Name + new string('*', PointerDepth);
 }
 
-public interface ITokenReader
-{
-    Token NextToken();
-}
-
 public sealed class Parser
 {
-    private readonly ITokenReader _reader;
+    private readonly LexerReader _reader;
     private readonly List<Token> _buf = new(); // tokens we’ve fetched
     private int _idx = 0;                      // index of "current" token in _buf
     private readonly HashSet<string> _typedefs =
@@ -58,7 +53,7 @@ public sealed class Parser
 
     private readonly HashSet<string> _structTags = new(StringComparer.Ordinal);
 
-    public Parser(ITokenReader reader) { _reader = reader;  }
+    public Parser(LexerReader reader) { _reader = reader;  }
 
     static bool IsAtBol(Token t) =>
         t.Leading.Span.Length == 0 || t.Leading.Span[^1].Kind == TriviaKind.Newline;

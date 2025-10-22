@@ -15,6 +15,7 @@ public enum TokenKind
     Extern, String,
     Null,
     Typedef, Struct, DirectiveHash,
+    Define, Undef, Include, Ifdef, Ifndef, Elif, Endif
 }
 
 public enum TriviaKind { Space, Newline, LineComment, BlockComment }
@@ -27,33 +28,62 @@ public readonly struct Trivia
     public Trivia(TriviaKind k, int start, int length) { Kind = k; Start = start; Length = length; }
 }
 
-public readonly struct Token
+public class Token
 {
     public TokenKind Kind { get; }
-    private readonly Lexer _lexer;
+    public readonly Lexer Source;
     public int Start { get; }
     public int Length { get; }
     public ReadOnlyMemory<Trivia> Leading { get; }
-    public string Lexeme => _lexer._src[Start..(Start + Length)];
+    public string Lexeme => Source.Src[Start..(Start + Length)];
 
-    public Token(TokenKind kind, Lexer lexer, int start, int length, ReadOnlyMemory<Trivia> leading)
-    { Kind = kind; _lexer = lexer ; Start = start; Length = length; Leading = leading; }
+    public (int line, int col) LineCol
+    {
+        get
+        {
+            var src = Source.Src;
+            int line = 1;
+            int lastLineStart = 0;
+            int limit = Math.Min(Start, src.Length);
+
+            for (int i = 0; i < limit; i++)
+            {
+                if (src[i] == '\n')
+                {
+                    line++;
+                    lastLineStart = i + 1;
+                }
+            }
+
+            int col = Start - lastLineStart + 1;
+            return (line, col);
+        }
+    }
+
+    public Token(TokenKind kind, Lexer source, int start, int length, ReadOnlyMemory<Trivia> leading)
+    { Kind = kind; Source = source; Start = start; Length = length; Leading = leading; }
+
+    public override string ToString()
+    {
+        var (line, col) = LineCol;
+        return $"({Kind}:{Lexeme}:{line}:{col})"; 
+    }
 }
 
 public sealed class Lexer
 {
-    public readonly string _file;
-    public readonly string _src;
+    public readonly string File;
+    public readonly string Src;
     private int _i;
     private bool _atBol = true; //beginning of line
 
     public Lexer(string file)
     {
-        _file = file;
-        _src = File.ReadAllText(file);
+        File = file;
+        Src = System.IO.File.ReadAllText(file);
     }
-    private char Peek(int k = 0) => _i + k < _src.Length ? _src[_i + k] : '\0';
-    private char Next() => _i < _src.Length ? _src[_i++] : '\0';
+    private char Peek(int k = 0) => _i + k < Src.Length ? Src[_i + k] : '\0';
+    private char Next() => _i < Src.Length ? Src[_i++] : '\0';
     private bool Match(char c) { if (Peek() == c) { _i++; return true; } return false; }
 
     private void CollectLeadingTrivia(List<Trivia> trivia)
@@ -156,7 +186,7 @@ public sealed class Lexer
         return new(kind, this, start, length, leading.ToArray());
     }
 
-    public Token NextToken()
+    public Token NextToken(Dictionary<string, TokenKind> keywords)
     {
         var leading = new List<Trivia>(capacity: 2);
         CollectLeadingTrivia(leading);
@@ -214,23 +244,12 @@ public sealed class Lexer
         if (char.IsLetter(c) || c == '_')
         {
             while (char.IsLetterOrDigit(Peek()) || Peek() == '_') Next();
-            string id = _src.Substring(start, _i - start);
-            return id switch
+            string id = Src.Substring(start, _i - start);
+            if (keywords.TryGetValue(id, out var tokenKind))
             {
-                "extern" => Create(TokenKind.Extern, start, id.Length, leading),
-                "return" => Create(TokenKind.Return, start, id.Length, leading),
-                "if" => Create(TokenKind.If, start, id.Length, leading),
-                "else" => Create(TokenKind.Else, start, id.Length, leading),
-                "while" => Create(TokenKind.While, start, id.Length, leading),
-                "for" => Create(TokenKind.For, start, id.Length, leading),
-                "break" => Create(TokenKind.Break, start, id.Length, leading),
-                "continue" => Create(TokenKind.Continue, start, id.Length, leading),
-                "NULL" => Create(TokenKind.Null, start, id.Length, leading),
-                "typedef" => Create(TokenKind.Typedef, start, id.Length, leading),
-                "struct" => Create(TokenKind.Struct, start, id.Length, leading),
-                _ => Create(TokenKind.Identifier, start, id.Length, leading),
-            };
-
+                return Create(tokenKind, start, id.Length, leading);
+            }
+            return Create(TokenKind.Identifier, start, id.Length, leading);
         }
 
         throw new Exception($"Unexpected character '{c}' at {start}");
