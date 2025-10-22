@@ -30,22 +30,28 @@ public readonly struct Trivia
 public readonly struct Token
 {
     public TokenKind Kind { get; }
+    private readonly Lexer _lexer;
     public int Start { get; }
     public int Length { get; }
     public ReadOnlyMemory<Trivia> Leading { get; }
-    public string Lexeme(Lexer lexer) => lexer._src[Start..(Start + Length)];
+    public string Lexeme => _lexer._src[Start..(Start + Length)];
 
-    public Token(TokenKind kind, int start, int length, ReadOnlyMemory<Trivia> leading)
-    { Kind = kind; Start = start; Length = length; Leading = leading; }
+    public Token(TokenKind kind, Lexer lexer, int start, int length, ReadOnlyMemory<Trivia> leading)
+    { Kind = kind; _lexer = lexer ; Start = start; Length = length; Leading = leading; }
 }
 
 public sealed class Lexer
 {
+    public readonly string _file;
     public readonly string _src;
     private int _i;
     private bool _atBol = true; //beginning of line
 
-    public Lexer(string src) { _src = src; }
+    public Lexer(string file)
+    {
+        _file = file;
+        _src = File.ReadAllText(file);
+    }
     private char Peek(int k = 0) => _i + k < _src.Length ? _src[_i + k] : '\0';
     private char Next() => _i < _src.Length ? _src[_i++] : '\0';
     private bool Match(char c) { if (Peek() == c) { _i++; return true; } return false; }
@@ -135,14 +141,19 @@ public sealed class Lexer
         {
             // not a valid number; backtrack to just the dot token
             _i = start + 1;
-            return new(TokenKind.Dot, start, 1, leading.ToArray());
+            return Create(TokenKind.Dot, start, 1, leading);
         }
 
         // classify
         if (hasDot || hasExp || hasSuffix || startedWithDot)
-            return new(TokenKind.FloatLiteral, start, _i - start, leading.ToArray());
+            return Create(TokenKind.FloatLiteral, start, _i - start, leading);
 
-        return new(TokenKind.IntLiteral, start, _i-start, leading.ToArray());
+        return Create(TokenKind.IntLiteral, start, _i - start, leading);
+    }
+    
+    Token Create(TokenKind kind, int start, int length, List<Trivia> leading)
+    {
+        return new(kind, this, start, length, leading.ToArray());
     }
 
     public Token NextToken()
@@ -152,7 +163,7 @@ public sealed class Lexer
         int start = _i;
 
         char c = Next();
-        if (c == '\0') return new(TokenKind.EOF, start, 0, leading.ToArray());
+        if (c == '\0') return Create(TokenKind.EOF, start, 0, leading);
 
         // Detect directives at BOL:  #include, #define, ...
         if (_atBol)
@@ -162,7 +173,7 @@ public sealed class Lexer
             if (c == '#')
             {
                 _atBol = false;
-                return new(TokenKind.DirectiveHash, start, 1, leading.ToArray());
+                return Create(TokenKind.DirectiveHash, start, 1, leading);
             }
         }
 
@@ -170,31 +181,31 @@ public sealed class Lexer
 
         switch (c)
         {
-            case '(': return new(TokenKind.LParen, start, 1, leading.ToArray());
-            case ')': return new(TokenKind.RParen, start, 1, leading.ToArray());
-            case '{': return new(TokenKind.LBrace, start, 1, leading.ToArray());
-            case '}': return new(TokenKind.RBrace, start, 1, leading.ToArray());
-            case ',': return new(TokenKind.Comma, start, 1, leading.ToArray());
-            case ';': return new(TokenKind.Semicolon, start, 1, leading.ToArray());
+            case '(': return Create(TokenKind.LParen, start, 1, leading);
+            case ')': return Create(TokenKind.RParen, start, 1, leading);
+            case '{': return Create(TokenKind.LBrace, start, 1, leading);
+            case '}': return Create(TokenKind.RBrace, start, 1, leading);
+            case ',': return Create(TokenKind.Comma, start, 1, leading);
+            case ';': return Create(TokenKind.Semicolon, start, 1, leading);
             case '+':
-                if (Match('+')) return new(TokenKind.PlusPlus, start, 2, leading.ToArray());
-                return new(TokenKind.Plus, start, 1, leading.ToArray());
+                if (Match('+')) return Create(TokenKind.PlusPlus, start, 2, leading);
+                return Create(TokenKind.Plus, start, 1, leading);
             case '-':
-                if (Match('-')) return new(TokenKind.MinusMinus, start, 2, leading.ToArray());
-                return new(TokenKind.Minus, start, 1, leading.ToArray());
-            case '*': return new(TokenKind.Star, start, 1, leading.ToArray());
-            case '/': return new(TokenKind.Slash, start, 1, leading.ToArray());
-            case '!': return Match('=') ? new(TokenKind.Neq, start, 2, leading.ToArray()) : new(TokenKind.Bang, start, 1, leading.ToArray());
-            case '&': return Match('&') ? new(TokenKind.AndAnd, start, 2, leading.ToArray()) : new(TokenKind.Amp, start, 1, leading.ToArray());
-            case '|': if (Match('|')) return new(TokenKind.OrOr, start, 2, leading.ToArray()); break;
-            case '=': return Match('=') ? new(TokenKind.Eq, start, 2, leading.ToArray()) : new(TokenKind.Assign, start, 1, leading.ToArray());
-            case '<': return Match('=') ? new(TokenKind.Le, start, 2, leading.ToArray()) : new(TokenKind.Lt, start, 1, leading.ToArray());
-            case '>': return Match('=') ? new(TokenKind.Ge, start, 2, leading.ToArray()) : new(TokenKind.Gt, start, 1, leading.ToArray());
+                if (Match('-')) return Create(TokenKind.MinusMinus, start, 2, leading);
+                return Create(TokenKind.Minus, start, 1, leading);
+            case '*': return Create(TokenKind.Star, start, 1, leading);
+            case '/': return Create(TokenKind.Slash, start, 1, leading);
+            case '!': return Match('=') ? Create(TokenKind.Neq, start, 2, leading) : Create(TokenKind.Bang, start, 1, leading);
+            case '&': return Match('&') ? Create(TokenKind.AndAnd, start, 2, leading) : Create(TokenKind.Amp, start, 1, leading);
+            case '|': if (Match('|')) return Create(TokenKind.OrOr, start, 2, leading); break;
+            case '=': return Match('=') ? Create(TokenKind.Eq, start, 2, leading) : Create(TokenKind.Assign, start, 1, leading);
+            case '<': return Match('=') ? Create(TokenKind.Le, start, 2, leading) : Create(TokenKind.Lt, start, 1, leading);
+            case '>': return Match('=') ? Create(TokenKind.Ge, start, 2, leading) : Create(TokenKind.Gt, start, 1, leading);
             case '"':
                 while (Peek() != '"' && Peek() != '\0') Next(); // (you can enhance later)
                 if (Peek() == '\0') throw new Exception("Unterminated string");
                 Next();
-                return new(TokenKind.String, start, _i - start, leading.ToArray());
+                return Create(TokenKind.String, start, _i - start, leading);
         }
         if (char.IsDigit(c) || c == '.')
         {
@@ -206,18 +217,18 @@ public sealed class Lexer
             string id = _src.Substring(start, _i - start);
             return id switch
             {
-                "extern" => new(TokenKind.Extern, start, id.Length, leading.ToArray()),
-                "return" => new(TokenKind.Return, start, id.Length, leading.ToArray()),
-                "if" => new(TokenKind.If, start, id.Length, leading.ToArray()),
-                "else" => new(TokenKind.Else, start, id.Length, leading.ToArray()),
-                "while" => new(TokenKind.While, start, id.Length, leading.ToArray()),
-                "for" => new(TokenKind.For, start, id.Length, leading.ToArray()),
-                "break" => new(TokenKind.Break, start, id.Length, leading.ToArray()),
-                "continue" => new(TokenKind.Continue, start, id.Length, leading.ToArray()),
-                "NULL" => new(TokenKind.Null, start, id.Length, leading.ToArray()),
-                "typedef" => new(TokenKind.Typedef, start, id.Length, leading.ToArray()),
-                "struct" => new(TokenKind.Struct, start, id.Length, leading.ToArray()),
-                _ => new(TokenKind.Identifier, start, id.Length, leading.ToArray()),
+                "extern" => Create(TokenKind.Extern, start, id.Length, leading),
+                "return" => Create(TokenKind.Return, start, id.Length, leading),
+                "if" => Create(TokenKind.If, start, id.Length, leading),
+                "else" => Create(TokenKind.Else, start, id.Length, leading),
+                "while" => Create(TokenKind.While, start, id.Length, leading),
+                "for" => Create(TokenKind.For, start, id.Length, leading),
+                "break" => Create(TokenKind.Break, start, id.Length, leading),
+                "continue" => Create(TokenKind.Continue, start, id.Length, leading),
+                "NULL" => Create(TokenKind.Null, start, id.Length, leading),
+                "typedef" => Create(TokenKind.Typedef, start, id.Length, leading),
+                "struct" => Create(TokenKind.Struct, start, id.Length, leading),
+                _ => Create(TokenKind.Identifier, start, id.Length, leading),
             };
 
         }
