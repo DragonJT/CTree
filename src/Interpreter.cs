@@ -345,6 +345,25 @@ namespace MiniC
             }
         }
 
+        private void ExecWhile(WhileStmt w)
+        {
+            while (Eval(w.Cond).IsTruthy)
+            {
+                try
+                {
+                    ExecStmt(w.Body);
+                }
+                catch (BreakSignal)
+                {
+                    break;
+                }
+                catch (ContinueSignal)
+                {
+                    continue;
+                }
+            }
+        }
+
         private void ExecIf(IfStmt i)
         {
             if (Eval(i.Cond).IsTruthy)
@@ -390,6 +409,10 @@ namespace MiniC
         {
             switch (s)
             {
+                case WhileStmt w:
+                    ExecWhile(w);
+                    return;
+                    
                 case ExprStmt es:
                     if (es.Expr is not null) _ = Eval(es.Expr);
                     return;

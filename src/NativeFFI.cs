@@ -70,9 +70,6 @@ public sealed class FfiBinder
 {
     private static (Type ret, Type[] args) MapSignature(string retType, List<ParamDecl> ps)
     {
-        static bool IsPtrish(string t) =>
-            t.EndsWith("*") || t == "void*" || t.StartsWith("GLFW");
-
         Type Map(string t) => t switch
         {
             "long" => typeof(long),
@@ -80,8 +77,8 @@ public sealed class FfiBinder
             "float" => typeof(float),
             "double" => typeof(double),
             "char" => typeof(string),
-            _ when IsPtrish(t) => typeof(IntPtr),
-            _ => throw new Exception($"FFI type not supported: {t}")
+            "void" => typeof(void),
+            _  => typeof(IntPtr),
         };
         return (Map(retType), ps.Select(p => Map(p.TypeName)).ToArray());
     }

@@ -124,6 +124,11 @@ namespace MiniC
                     if (i.Else is not null) list.Add(("else", i.Else));
                     break;
 
+                case WhileStmt w:
+                    list.Add(("cond", w.Cond));
+                    list.Add(("body", w.Body));
+                    break;
+
                 case ForStmt f:
                     if (f.InitDecl is not null) list.Add(("init(decl)", f.InitDecl));
                     if (f.InitExpr is not null) list.Add(("init(expr)", f.InitExpr));
