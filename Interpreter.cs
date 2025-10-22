@@ -1,13 +1,97 @@
 
 namespace MiniC
 {
-    // -------- Runtime value --------
-    // Simple int/char-only runtime for now (C-like: 0=false, nonzero=true)
-    public readonly record struct Value(int Int)
+    public readonly struct Value
     {
-        public static implicit operator Value(int i) => new(i);
-        public static implicit operator int(Value v) => v.Int;
-        public override string ToString() => Int.ToString();
+        public enum Kind { Int, Float }
+        public readonly Kind Type;
+        public readonly long I;
+        public readonly double F;
+
+        public Value(long i)
+        {
+            Type = Kind.Int;
+            I = i;
+            F = i;
+        }
+
+        public Value(double f)
+        {
+            Type = Kind.Float;
+            F = f;
+            I = (int)f;
+        }
+
+        public bool IsFloat => Type == Kind.Float;
+        public bool IsTruthy => IsFloat ? F != 0.0 : I != 0;
+
+        public double AsFloat() => IsFloat ? F : I;
+
+        public override string ToString() => IsFloat ? F.ToString() : I.ToString();
+
+        public static implicit operator Value(long i) => new(i);
+        public static implicit operator Value(double f) => new(f);
+
+        // ---------- arithmetic ----------
+        public static Value operator +(Value a, Value b)
+        {
+            if (a.IsFloat || b.IsFloat)
+                return new Value(a.AsFloat() + b.AsFloat());
+            return new Value(a.I + b.I);
+        }
+
+        public static Value operator -(Value a, Value b)
+        {
+            if (a.IsFloat || b.IsFloat)
+                return new Value(a.AsFloat() - b.AsFloat());
+            return new Value(a.I - b.I);
+        }
+
+        public static Value operator *(Value a, Value b)
+        {
+            if (a.IsFloat || b.IsFloat)
+                return new Value(a.AsFloat() * b.AsFloat());
+            return new Value(a.I * b.I);
+        }
+
+        public static Value operator /(Value a, Value b)
+        {
+            if (a.IsFloat || b.IsFloat)
+                return new Value(a.AsFloat() / b.AsFloat());
+            if (b.I == 0) throw new DivideByZeroException();
+            return new Value(a.I / b.I);
+        }
+
+        // ---------- comparison ----------
+        public static Value operator <(Value a, Value b) => new (a.AsFloat() < b.AsFloat() ? 1 : 0);
+        public static Value operator >(Value a, Value b) => new (a.AsFloat() > b.AsFloat() ? 1 : 0);
+        public static Value operator <=(Value a, Value b) => new (a.AsFloat() <= b.AsFloat() ? 1 : 0);
+        public static Value operator >=(Value a, Value b) => new (a.AsFloat() >= b.AsFloat() ? 1 : 0);
+        public static Value operator ==(Value a, Value b) => new (a.AsFloat() == b.AsFloat() ? 1 : 0);
+        public static Value operator !=(Value a, Value b) => new (a.AsFloat() != b.AsFloat() ? 1 : 0);
+
+        // aliases for && and || usage in your interpreter
+        public static Value And(Value a, Value b) => new (a.IsTruthy && b.IsTruthy ? 1 : 0);
+        public static Value Or(Value a, Value b) => new (a.IsTruthy || b.IsTruthy ? 1 : 0);
+
+        // ---------- equality boilerplate ----------
+        public override bool Equals(object? obj)
+        {
+            if (obj is not Value v) return false;
+            return this.AsFloat() == v.AsFloat();
+        }
+
+        public override int GetHashCode() => HashCode.Combine(Type, I, F);
+
+        public static Value Add(Value v)
+        {
+            return v.IsFloat ? +v.F : +v.I;
+        }
+
+        public static Value Sub(Value v)
+        {
+            return v.IsFloat ? -v.F : -v.I;
+        }
     }
 
     // -------- Return signaling (to unwind to function boundary) --------
@@ -101,7 +185,7 @@ namespace MiniC
                 // print(x) → prints integer and returns x
                 ["print"] = args =>
                 {
-                    foreach (var a in args) Console.WriteLine(a.Int);
+                    foreach (var a in args) Console.WriteLine(a);
                     return args.Count > 0 ? args[^1] : new Value(0);
                 }
             };
@@ -177,9 +261,9 @@ namespace MiniC
                 // loop
                 while (true)
                 {
-                    int cond = 1;
-                    if (f.Cond is not null) cond = Eval(f.Cond).Int;
-                    if (cond == 0) break;
+                    bool cond = true;
+                    if (f.Cond is not null) cond = Eval(f.Cond).IsTruthy;
+                    if (!cond) break;
 
                     try
                     {
@@ -210,8 +294,7 @@ namespace MiniC
 
         private void ExecIf(IfStmt i)
         {
-            var c = Eval(i.Cond).Int;            // 0 == false, nonzero == true
-            if (c != 0)
+            if (Eval(i.Cond).IsTruthy)
             {
                 ExecStmt(i.Then);
             }
@@ -286,6 +369,31 @@ namespace MiniC
 
         
         // ----- Expressions -----
+        private Value PrefixInc(UnaryExpr u, int delta)
+        {
+            if (u.Expr is not IdentExpr id)
+                throw new Exception("++/-- target must be identifier");
+
+            if (!_env.TryGet(id.Name, out var old))
+                throw new Exception($"Undefined variable '{id.Name}'");
+
+            var newVal = old + new Value(delta);
+            _env.TrySet(id.Name, newVal);
+            return newVal; // return updated value
+        }
+
+        private Value PostfixInc(UnaryExpr u, int delta)
+        {
+            if (u.Expr is not IdentExpr id)
+                throw new Exception("++/-- target must be identifier");
+
+            if (!_env.TryGet(id.Name, out var old))
+                throw new Exception($"Undefined variable '{id.Name}'");
+
+            var newVal = old + new Value(delta);
+            _env.TrySet(id.Name, newVal);
+            return old; // return old value (post semantics)
+        }
 
         private Value Eval(Expr e)
         {
@@ -294,100 +402,53 @@ namespace MiniC
                 case IntegerExpr i:
                     return new Value(i.Value);
 
+                case FloatExpr f:
+                    return new Value(f.Value);
+                    
                 case IdentExpr id:
                     if (!_env.TryGet(id.Name, out var v))
                         throw new Exception($"Undefined identifier '{id.Name}'");
                     return v;
 
                 case UnaryExpr u:
+                {
+                    var val = Eval(u.Expr);
+
+                    return u.Op switch
                     {
-                        // Evaluate operand
-                        switch (u.Op)
-                        {
-                            // ----- Prefix increment/decrement -----
-                            case "++pre":
-                            case "--pre":
-                                {
-                                    if (u.Expr is not IdentExpr preId)
-                                        throw new Exception("++/-- must target an identifier");
+                        "+" => Value.Add(val), 
+                        "-" => Value.Sub(val),
+                        "!" => new Value(val.IsTruthy ? 0 : 1), // logical NOT, returns int 0/1
 
-                                    if (!_env.TryGet(preId.Name, out var preVal))
-                                        throw new Exception($"Undefined variable '{preId.Name}'");
+                        // increment/decrement cases (you already have them)
+                        "++pre"  => PrefixInc(u, +1),
+                        "--pre"  => PrefixInc(u, -1),
+                        "++post" => PostfixInc(u, +1),
+                        "--post" => PostfixInc(u, -1),
 
-                                    var newVal = u.Op == "++pre"
-                                        ? new Value(preVal.Int + 1)
-                                        : new Value(preVal.Int - 1);
-
-                                    _env.TrySet(preId.Name, newVal);
-                                    return newVal; // return new value (prefix semantics)
-                                }
-
-                            // ----- Postfix increment/decrement -----
-                            case "++post":
-                            case "--post":
-                                {
-                                    if (u.Expr is not IdentExpr postId)
-                                        throw new Exception("++/-- must target an identifier");
-
-                                    if (!_env.TryGet(postId.Name, out var postVal))
-                                        throw new Exception($"Undefined variable '{postId.Name}'");
-
-                                    var newVal = u.Op == "++post"
-                                        ? new Value(postVal.Int + 1)
-                                        : new Value(postVal.Int - 1);
-
-                                    _env.TrySet(postId.Name, newVal);
-                                    return postVal; // return old value (postfix semantics)
-                                }
-
-                            // ----- Simple unary operators -----
-                            case "+":
-                                return new Value(+Eval(u.Expr).Int);
-                            case "-":
-                                return new Value(-Eval(u.Expr).Int);
-                            case "!":
-                                return new Value(Eval(u.Expr).Int == 0 ? 1 : 0);
-                            case "&":
-                            case "*":
-                                throw new Exception("Address/deref not supported yet");
-                            default:
-                                throw new Exception($"Unknown unary op {u.Op}");
-                        }
-                    }
+                        _ => throw new Exception($"Unsupported unary op '{u.Op}'")
+                    };
+                }
 
                 case BinaryExpr b:
                     {
-                        // short-circuit for && and ||
-                        if (b.Op == "&&")
-                        {
-                            var l = Eval(b.Left).Int;
-                            if (l == 0) return new Value(0);
-                            var r = Eval(b.Right).Int;
-                            return new Value(r != 0 ? 1 : 0);
-                        }
-                        if (b.Op == "||")
-                        {
-                            var l = Eval(b.Left).Int;
-                            if (l != 0) return new Value(1);
-                            var r = Eval(b.Right).Int;
-                            return new Value(r != 0 ? 1 : 0);
-                        }
-
-                        var a = Eval(b.Left).Int;
-                        var c = Eval(b.Right).Int;
+                        var a = Eval(b.Left);
+                        var c = Eval(b.Right);
 
                         return b.Op switch
                         {
-                            "+" => new Value(a + c),
-                            "-" => new Value(a - c),
-                            "*" => new Value(a * c),
-                            "/" => new Value(c == 0 ? throw new DivideByZeroException() : a / c),
-                            "==" => new Value(a == c ? 1 : 0),
-                            "!=" => new Value(a != c ? 1 : 0),
-                            "<" => new Value(a < c ? 1 : 0),
-                            ">" => new Value(a > c ? 1 : 0),
-                            "<=" => new Value(a <= c ? 1 : 0),
-                            ">=" => new Value(a >= c ? 1 : 0),
+                            "&&" => Value.And(a, c),
+                            "||" => Value.Or(a, c),
+                            "+" => a + c,
+                            "-" => a - c,
+                            "*" => a * c,
+                            "/" => a / c,
+                            "==" => a == c,
+                            "!=" => a != c,
+                            "<" => a < c,
+                            ">" => a > c,
+                            "<=" => a <= c,
+                            ">=" => a >= c,
                             _ => throw new Exception($"Unsupported binary op {b.Op}")
                         };
                     }

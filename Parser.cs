@@ -4,8 +4,9 @@ namespace MiniC
 
     public enum TokenKind
     {
-        EOF, Identifier, Integer,
-        Int, Char, Return, If, Else, While,
+        EOF, Identifier, IntLiteral, FloatLiteral, Dot,
+        Int, Char, Float,
+        Return, If, Else, While,
         LParen, RParen, LBrace, RBrace, Comma, Semicolon,
         Plus, Minus, Star, Slash, Bang,
         Amp, // '&'
@@ -28,10 +29,64 @@ namespace MiniC
         private char Next() => _i < _src.Length ? _src[_i++] : '\0';
         private bool Match(char c) { if (Peek() == c) { _i++; return true; } return false; }
 
+        private Token ScanNumber(int start, bool startedWithDot)
+        {
+            bool haveDigits = !startedWithDot;
+
+            if (!startedWithDot)
+            {
+                while (char.IsDigit(Peek())) { Next(); haveDigits = true; }
+            }
+
+            bool hasDot = false;
+            if (Peek() == '.')
+            {
+                hasDot = true; Next();
+                while (char.IsDigit(Peek())) { Next(); haveDigits = true; }
+            }
+
+            bool hasExp = false;
+            if (Peek() is 'e' or 'E')
+            {
+                int save = _i;
+                Next();
+                if (Peek() is '+' or '-') Next();
+                if (char.IsDigit(Peek()))
+                {
+                    hasExp = true;
+                    while (char.IsDigit(Peek())) Next();
+                }
+                else
+                {
+                    // rollback if it's not a real exponent
+                    _i = save;
+                }
+            }
+
+            bool hasSuffix = false;
+            if (Peek() is 'f' or 'F') { hasSuffix = true; Next(); }
+
+            if (!haveDigits)
+            {
+                // not a valid number; backtrack to just the dot token
+                _i = start + 1;
+                return new(TokenKind.Dot, ".", start);
+            }
+    
+            string lex = _src.Substring(start, _i - start);
+
+
+            // classify
+            if (hasDot || hasExp || hasSuffix || startedWithDot)
+                return new(TokenKind.FloatLiteral, lex, start);
+
+            return new(TokenKind.IntLiteral, lex, start);
+        }
+
         public Token NextToken()
         {
             // skip whitespace & // comments (simple)
-            for (;;)
+            for (; ; )
             {
                 while (char.IsWhiteSpace(Peek())) _i++;
                 if (Peek() == '/' && Peek(1) == '/')
@@ -51,10 +106,10 @@ namespace MiniC
                 case ';': return new(TokenKind.Semicolon, ";", start);
                 case '+':
                     if (Match('+')) return new(TokenKind.PlusPlus, "++", start);
-                        return new(TokenKind.Plus, "+", start);
+                    return new(TokenKind.Plus, "+", start);
                 case '-':
                     if (Match('-')) return new(TokenKind.MinusMinus, "--", start);
-                        return new(TokenKind.Minus, "-", start);
+                    return new(TokenKind.Minus, "-", start);
                 case '*': return new(TokenKind.Star, "*", start);
                 case '/': return new(TokenKind.Slash, "/", start);
                 case '!': return Match('=') ? new(TokenKind.Neq, "!=", start) : new(TokenKind.Bang, "!", start);
@@ -63,13 +118,10 @@ namespace MiniC
                 case '=': return Match('=') ? new(TokenKind.Eq, "==", start) : new(TokenKind.Assign, "=", start);
                 case '<': return Match('=') ? new(TokenKind.Le, "<=", start) : new(TokenKind.Lt, "<", start);
                 case '>': return Match('=') ? new(TokenKind.Ge, ">=", start) : new(TokenKind.Gt, ">", start);
-                
             }
-            if (char.IsDigit(c))
+            if (char.IsDigit(c) || c == '.')
             {
-                while (char.IsDigit(Peek())) Next();
-                string lex = _src.Substring(start, _i - start);
-                return new(TokenKind.Integer, lex, start);
+                return ScanNumber(start, c == '.');
             }
             if (char.IsLetter(c) || c == '_')
             {
@@ -79,6 +131,7 @@ namespace MiniC
                 {
                     "int" => new(TokenKind.Int, id, start),
                     "char" => new(TokenKind.Char, id, start),
+                    "float" => new(TokenKind.Float, id, start),
                     "return" => new(TokenKind.Return, id, start),
                     "if" => new(TokenKind.If, id, start),
                     "else" => new(TokenKind.Else, id, start),
@@ -105,6 +158,7 @@ namespace MiniC
     public record BinaryExpr(string Op, Expr Left, Expr Right, int P) : Expr(P);
     public record AssignExpr(Expr Left, Expr Right, int P) : Expr(P);
     public record CallExpr(Expr Callee, List<Expr> Args, int P) : Expr(P);
+    public record FloatExpr(float Value, int P) : Expr(P);
 
     public abstract record Stmt(int Pos) : Node(Pos);
     public record ExprStmt(Expr? Expr, int P) : Stmt(P);
@@ -192,6 +246,7 @@ namespace MiniC
         private string ParseTypeSpecifier()
         {
             if (Match(TokenKind.Int)) return "int";
+            if (Match(TokenKind.Float)) return "float";
             if (Match(TokenKind.Char)) return "char";
             throw new Exception($"Type specifier expected at {_t.Pos}");
         }
@@ -412,10 +467,28 @@ namespace MiniC
 
         private Expr ParsePrimary()
         {
-            if (Check(TokenKind.Integer))
+            if (Check(TokenKind.IntLiteral))
             {
                 var t = _t; _t = _lx.NextToken();
                 return new IntegerExpr(int.Parse(t.Lexeme), t.Pos);
+            }
+            if (Check(TokenKind.FloatLiteral))
+            {
+                var t = _t;
+                _t = _lx.NextToken();
+
+                string text = t.Lexeme.EndsWith("f", StringComparison.OrdinalIgnoreCase)
+                    ? t.Lexeme[..^1]
+                    : t.Lexeme;
+
+                if (!float.TryParse(
+                    text,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out float val))
+                    throw new Exception($"Invalid float literal '{t.Lexeme}' at {t.Pos}");
+
+                return new FloatExpr(val, t.Pos);
             }
             if (Check(TokenKind.Identifier))
             {
