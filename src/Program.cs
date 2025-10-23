@@ -1,4 +1,6 @@
 ﻿
+using System.Text;
+
 namespace MiniC;
 
 public sealed class SourceTable
@@ -63,6 +65,12 @@ static class Program
         var projector = new PpProjector(env);
         var expandedTokens = projector.Project(ppTranslationUnit);
 
+        StringBuilder builder = new();
+        foreach (var t in expandedTokens)
+        {
+            t.ToCode(builder);
+        }
+        File.WriteAllText("expanded.c", builder.ToString());
         var parser = new Parser(new LexerReader(expandedTokens));
         var tu = parser.ParseTranslationUnit();
         Console.WriteLine(AstPrinter.Dump(tu));

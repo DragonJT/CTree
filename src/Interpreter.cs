@@ -229,9 +229,6 @@ namespace MiniC
                     case FuncDef f:
                         _fns.Add(f);
                         break;
-                    case ExternFuncDecl e:
-                        _native[e.Func.Name] = FfiBinder.Bind(e);
-                        break;
                 }
             }
 
@@ -281,7 +278,7 @@ namespace MiniC
                 }
 
                 // Execute body
-                ExecCompound(f.Body);
+                ExecCompound(f.Body!);
             }
             catch (ReturnSignal r)
             {

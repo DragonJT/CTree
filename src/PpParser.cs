@@ -91,6 +91,12 @@ public sealed class PpParser
     private Token Consume() { var t = LA(0); _idx++; return t; }
     private bool Check(TokenKind k) => LA(0).Kind == k;
 
+    private bool Match(TokenKind k)
+    {
+        if (Check(k)) { Consume(); return true; }
+        return false;
+    }
+
     private Token Eat(TokenKind k)
     {
         if (!Check(k)) throw new Exception($"PP: expected {k} but found {LA(0)}");
@@ -124,13 +130,52 @@ public sealed class PpParser
         return ok;
     }
 
-    private Token ConsumeDirective(PpTokenKind kw)
+    private PpGroupPart ConsumeThen(Func<PpGroupPart> parse)
+    {
+        Consume(); 
+        return parse();
+    }
+
+    private void ConsumeDirective(PpTokenKind expected)
     {
         Eat(TokenKind.DirectiveHash);
-        if (LA(0).PpKind != kw)
-            throw new Exception($"PP: expected #{kw} but saw #{LA(0)}");
-        return Consume();
+        if (LA(0).PpKind != expected)
+            throw new Exception($"Expected #{expected} but saw #{LA(0).PpKind}");
+        Consume(); 
     }
+
+    private PpDefineDirective ParseDefine()
+    {
+        var nameTok = Eat(TokenKind.Identifier); // GLAPI
+        string name = AsString(nameTok);
+
+        bool fnLike = false;
+        var parameters = new List<string>();
+        bool variadic = false;
+
+        // function-like only if '(' is ADJACENT to the name (no space)
+        if (Check(TokenKind.LParen) && AreAdjacent(nameTok, LA(0)))
+        {
+            fnLike = true;
+            Eat(TokenKind.LParen);
+            if (!Check(TokenKind.RParen))
+            {
+                do
+                {
+                    if (TryConsumeEllipsis(out _)) { variadic = true; break; }
+                    var p = Eat(TokenKind.Identifier);
+                    parameters.Add(AsString(p));
+                    if (TryConsumeEllipsis(out _)) { variadic = true; }
+                } while (Match(TokenKind.Comma));
+            }
+            Eat(TokenKind.RParen);
+        }
+
+        // replacement list: everything to end-of-line (attributes, extern, whatever)
+        var repl = CollectRestOfLine();
+        return new PpDefineDirective(name, fnLike, parameters, variadic, repl);
+    }
+
 
     private static string AsString(Token t) => new(t.Source.Src.AsSpan(t.Start, t.Length));
 
@@ -242,55 +287,6 @@ public sealed class PpParser
         var name = AsString(nameTok);
         CollectRestOfLine(); // ignore trailing garbage to EOL
         return new PpUndefDirective(name);
-    }
-
-    private PpDefineDirective ParseDefine()
-    {
-        var nameTok = Eat(TokenKind.Identifier);
-        string name = AsString(nameTok);
-
-        bool fnLike = false;
-        bool variadic = false;
-        var parameters = ImmutableArray.CreateBuilder<string>();
-
-        // Function-like only if '(' is immediately adjacent to macro name
-        if (Check(TokenKind.LParen) && AreAdjacent(nameTok, LA(0)))
-        {
-            fnLike = true;
-            Eat(TokenKind.LParen);
-
-            if (Check(TokenKind.RParen))
-            {
-                Consume(); // empty parameter list
-            }
-            else
-            {
-                while (true)
-                {
-                    // variadic '...'
-                    if (TryConsumeEllipsis(out _))
-                    {
-                        variadic = true;
-                        break;
-                    }
-
-                    var p = Eat(TokenKind.Identifier);
-                    parameters.Add(AsString(p));
-
-                    // optional '...'(GNU) right after param name => variadic
-                    if (TryConsumeEllipsis(out _)) { variadic = true; }
-
-                    if (Check(TokenKind.Comma)) { Consume(); continue; }
-                    break;
-                }
-                Eat(TokenKind.RParen);
-            }
-        }
-
-        // replacement list: raw tokens until end-of-line
-        var repl = CollectRestOfLine();
-
-        return new PpDefineDirective(name, fnLike, parameters.ToImmutable(), variadic, repl);
     }
 
     private bool TryConsumeEllipsis(out Token? firstDot)

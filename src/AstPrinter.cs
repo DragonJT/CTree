@@ -51,38 +51,44 @@ namespace MiniC
 
             return n switch
             {
-                StructDecl s => $"StructDecl {s.Name}{pos}",
+                TypedefDecl td => td.Type switch
+                {
+                    FuncPtrTypeRef f => $"Typedef {td.Name}: {f}",
+                    TypeRef tr => $"Typedef {td.Name}: {tr}",
+                    _ => $"Typedef {td.Name}"
+                },
+                StructDecl s => $"StructDecl {s.Name}{s.Name2}{pos}",
                 StructField f => $"Field {f.Type} {f.Name}{pos}",
                 TranslationUnit _ => $"TranslationUnit{pos}",
-                FuncDef f         => $"FuncDef {f.RetType} {f.Name}{pos}",
-                ParamDecl p       => $"Param {p.Type} {p.Name}{pos}",
-                VarDecl v         => v.Init is null
+                FuncDef f => $"FuncDef {f.RetType} " + (f.Extern ? "extern " : "") + $"{f.Name}{pos}",
+                ParamDecl p => $"Param {p.Type} {p.Name}{pos}",
+                VarDecl v => v.Init is null
                                         ? $"VarDecl {v.Type} {v.Name}{pos}"
                                         : $"VarDecl {v.Type} {v.Name} = …{pos}",
 
-                CompoundStmt _    => $"Block{pos}",
-                ReturnStmt r      => r.Expr is null ? $"Return{pos}" : $"Return …{pos}",
-                ExprStmt s        => s.Expr is null ? $"ExprStmt ;{pos}" : $"ExprStmt …;{pos}",
-                IfStmt _          => $"If{pos}",
-                ForStmt _         => $"For{pos}",
-                BreakStmt _       => $"Break{pos}",
-                ContinueStmt _    => $"Continue{pos}",
+                CompoundStmt _ => $"Block{pos}",
+                ReturnStmt r => r.Expr is null ? $"Return{pos}" : $"Return …{pos}",
+                ExprStmt s => s.Expr is null ? $"ExprStmt ;{pos}" : $"ExprStmt …;{pos}",
+                IfStmt _ => $"If{pos}",
+                ForStmt _ => $"For{pos}",
+                BreakStmt _ => $"Break{pos}",
+                ContinueStmt _ => $"Continue{pos}",
 
-                IntegerExpr i     => $"Int {i.Value}{pos}",
-                IdentExpr id      => $"Ident {id.Name}{pos}",
-                AssignExpr _      => $"Assign{pos}",
-                CallExpr _        => $"Call{pos}",
-                UnaryExpr u       => u.Op switch
+                IntegerExpr i => $"Int {i.Value}{pos}",
+                IdentExpr id => $"Ident {id.Name}{pos}",
+                AssignExpr _ => $"Assign{pos}",
+                CallExpr _ => $"Call{pos}",
+                UnaryExpr u => u.Op switch
                 {
-                    "++pre"  => $"PreInc{pos}",
-                    "--pre"  => $"PreDec{pos}",
+                    "++pre" => $"PreInc{pos}",
+                    "--pre" => $"PreDec{pos}",
                     "++post" => $"PostInc{pos}",
                     "--post" => $"PostDec{pos}",
-                    _        => $"Unary '{u.Op}'{pos}"
+                    _ => $"Unary '{u.Op}'{pos}"
                 },
-                BinaryExpr b      => $"Binary '{b.Op}'{pos}",
+                BinaryExpr b => $"Binary '{b.Op}'{pos}",
 
-                _                 => n.GetType().Name + pos
+                _ => n.GetType().Name + pos
             };
         }
 
@@ -97,15 +103,11 @@ namespace MiniC
                         list.Add(($"decls[{i}]", tu.Decls[i]));
                     break;
 
-                case LinkageGroup lg:
-                    for (var i = 0; i < lg.Decls.Count; i++)
-                        list.Add(($"decls[{i}]", lg.Decls[i]));
-                    break;
-
                 case FuncDef f:
                     for (int i = 0; i < f.Params.Count; i++)
                         list.Add(($"param[{i}]", f.Params[i]));
-                    list.Add(("body", f.Body));
+                    if (f.Body != null)
+                        list.Add(("body", f.Body));
                     break;
 
                 case CompoundStmt b:
@@ -165,8 +167,11 @@ namespace MiniC
                     break;
 
                 case StructDecl s:
-                    for (int i = 0; i < s.Fields.Count; i++)
-                        list.Add(($"field[{i}]", s.Fields[i]));
+                    if (s.Fields != null)
+                    {
+                        for (int i = 0; i < s.Fields.Count; i++)
+                            list.Add(($"field[{i}]", s.Fields[i]));
+                    }
                     break;
             }
 

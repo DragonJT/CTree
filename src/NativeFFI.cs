@@ -68,9 +68,9 @@ public sealed class NativeFunction
 
 public sealed class FfiBinder
 {
-    private static (Type ret, Type[] args) MapSignature(TypeRef retType, List<ParamDecl> ps)
+    private static (Type ret, Type[] args) MapSignature(TypeRefBase retType, List<ParamDecl> ps)
     {
-        static Type Map(TypeRef type)
+        static Type Map(TypeRefBase type)
         {
             Type MapName(string t) => t switch
             {
@@ -82,33 +82,37 @@ public sealed class FfiBinder
                 "void" => typeof(void),
                 _ => typeof(IntPtr),
             };
-            var csType = MapName(type.Name);
-            if (csType == typeof(char) && type.PointerDepth == 1)
+
+            if(type is TypeRef typeRef)
             {
-                csType = typeof(string);
+                var csType = MapName(typeRef.Name);
+                if (csType == typeof(char) && typeRef.PointerDepth == 1)
+                {
+                    csType = typeof(string);
+                }
+                return csType;
             }
-            return csType;
+            else
+            {
+                throw new Exception("type ref function not yet supported");
+            }
         }
 
         return (Map(retType), ps.Select(p => Map(p.Type)).ToArray());
     }
 
-    public static NativeFunction Bind(ExternFuncDecl d)
+    public static NativeFunction Bind(FuncDef func, string dllName)
     {
         // Load the DLL (cross-platform)
-        IntPtr h = NativeLibrary.Load(d.DllName);
-        string entry = d.EntryPoint ?? d.Func.Name;
+        IntPtr h = NativeLibrary.Load(dllName);
+        string entry = func.Name;
 
         // Get function pointer
         IntPtr p = NativeLibrary.GetExport(h, entry);
 
-        (Type ret, Type[] args) = MapSignature(d.Func.RetType, d.Func.Params);
+        (Type ret, Type[] args) = MapSignature(func.RetType, func.Params);
 
-        var cc = d.CallConv?.ToLowerInvariant() switch
-        {
-            "stdcall" => CallingConvention.StdCall,
-            _         => CallingConvention.Cdecl, // default
-        };
+        var cc = CallingConvention.Cdecl;
 
         var delegateType = UnmanagedDelegateFactory.Create(ret, cc, args);
 
