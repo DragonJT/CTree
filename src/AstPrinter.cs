@@ -51,6 +51,8 @@ namespace MiniC
 
             return n switch
             {
+                StructDecl s => $"StructDecl {s.Name}{pos}",
+                StructField f => $"Field {f.Type} {f.Name}{pos}",
                 TranslationUnit _ => $"TranslationUnit{pos}",
                 FuncDef f         => $"FuncDef {f.RetType} {f.Name}{pos}",
                 ParamDecl p       => $"Param {p.Type} {p.Name}{pos}",
@@ -95,6 +97,11 @@ namespace MiniC
                         list.Add(($"decls[{i}]", tu.Decls[i]));
                     break;
 
+                case LinkageGroup lg:
+                    for (var i = 0; i < lg.Decls.Count; i++)
+                        list.Add(($"decls[{i}]", lg.Decls[i]));
+                    break;
+
                 case FuncDef f:
                     for (int i = 0; i < f.Params.Count; i++)
                         list.Add(($"param[{i}]", f.Params[i]));
@@ -132,8 +139,8 @@ namespace MiniC
                 case ForStmt f:
                     if (f.InitDecl is not null) list.Add(("init(decl)", f.InitDecl));
                     if (f.InitExpr is not null) list.Add(("init(expr)", f.InitExpr));
-                    if (f.Cond is not null)     list.Add(("cond", f.Cond));
-                    if (f.Post is not null)     list.Add(("post", f.Post));
+                    if (f.Cond is not null) list.Add(("cond", f.Cond));
+                    if (f.Post is not null) list.Add(("post", f.Post));
                     list.Add(("body", f.Body));
                     break;
 
@@ -157,7 +164,10 @@ namespace MiniC
                     list.Add(("right", b.Right));
                     break;
 
-                // leaf nodes: IntegerExpr, IdentExpr, ParamDecl (no children)
+                case StructDecl s:
+                    for (int i = 0; i < s.Fields.Count; i++)
+                        list.Add(($"field[{i}]", s.Fields[i]));
+                    break;
             }
 
             return list;

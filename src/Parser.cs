@@ -34,13 +34,23 @@ public record FuncDef(TypeRef RetType, string Name, List<ParamDecl> Params, Comp
 public record TranslationUnit(List<Decl> Decls, int P) : Node(P);
 public record TypedefDecl(TypeRef Type, string Name, int P) : Decl(P);
 public record OpaqueStructDecl(string Tag, int P) : Decl(P);
+public record StructField(TypeRef Type, string Name, int P) : Node(P);
 
-public record ExternFuncDecl(string DllName, TypeRef RetType, string Name,
-    List<ParamDecl> Params, string? EntryPoint, string? CallConv, int P) : Decl(P);
+public record StructDecl(string Name, List<StructField> Fields, int P) : Decl(P)
+{
+    public override string ToString() => $"struct {Name}";
+}
+
+public record ExternFuncDecl(string DllName, string? EntryPoint, string? CallConv, FuncDef Func, int P) : Decl(P);
 
 public sealed record TypeRef(bool Struct, string Name, int PointerDepth = 0)
 {
-    public override string ToString() => Struct?"struct ":"" + Name + new string('*', PointerDepth);
+    public override string ToString() => Struct ? "struct " : "" + Name + new string('*', PointerDepth);
+}
+
+public record LinkageGroup(string Language, List<Decl> Decls, int P) : Decl(P)
+{
+    public override string ToString() => $"extern \"{Language}\"";
 }
 
 public sealed class Parser
@@ -53,7 +63,7 @@ public sealed class Parser
 
     private readonly HashSet<string> _structTags = new(StringComparer.Ordinal);
 
-    public Parser(LexerReader reader) { _reader = reader;  }
+    public Parser(LexerReader reader) { _reader = reader; }
 
     static bool IsAtBol(Token t) =>
         t.Leading.Span.Length == 0 || t.Leading.Span[^1].Kind == TriviaKind.Newline;
@@ -92,7 +102,7 @@ public sealed class Parser
     private Token Eat(TokenKind k)
     {
         if (!Check(k))
-            throw new Exception($"Expected {k} but found {LA(0).Kind} at {LA(0).Start}");
+            throw new Exception($"Expected {k} but found {LA(0)}");
         return Consume();
     }
 
@@ -103,13 +113,38 @@ public sealed class Parser
     private int Mark() => _idx;
     private void Reset(int mark) => _idx = mark;
 
-    public TranslationUnit ParseTranslationUnit()
+    private static bool IsLinkageString(Token t)
     {
-        var decls = new List<Decl>();
-        while (!Check(TokenKind.EOF))
-            decls.Add(ParseExternalDeclaration());
-        return new TranslationUnit(decls, 0);
+        if (t.Kind != TokenKind.String) return false;
+        var s = t.Lexeme; // includes quotes
+        return s == "\"C\"" || s == "\"C++\"";
     }
+
+    public TranslationUnit ParseTranslationUnit()
+{
+    var decls = new List<Decl>();
+    while (!Check(TokenKind.EOF))
+    {
+        // Handle block form at TU level: extern "C" { ... }
+        if (Check(TokenKind.Extern) && IsLinkageString(LA(1)) && LA(2).Kind == TokenKind.LBrace)
+        {
+            var extTok = Consume();        // extern
+            var langTok = Consume();       // "C" / "C++"
+            Eat(TokenKind.LBrace);
+
+            var inner = new List<Decl>();
+            while (!Check(TokenKind.RBrace) && !Check(TokenKind.EOF))
+                inner.Add(ParseExternalDeclaration());
+
+            Eat(TokenKind.RBrace);
+            decls.Add(new LinkageGroup(langTok.Unquote(), inner, extTok.Start));
+            continue;
+        }
+
+        decls.Add(ParseExternalDeclaration());
+    }
+    return new TranslationUnit(decls, 0);
+}
 
     private TypeRef? ParseTypeRef()
     {
@@ -151,27 +186,16 @@ public sealed class Parser
         return new TypedefDecl(type!, newName, 0);
     }
 
-    private Decl ParseExternalDeclaration()
+    private FuncDef? ParseFuncDef()
     {
-        if (Match(TokenKind.Extern))
+        var type = ParseTypeRef();
+        if (type == null) return null;
+        if (!Check(TokenKind.Identifier)) return null;
+        string name = Consume().Lexeme;
+
+        if (Match(TokenKind.LParen))
         {
-            string? callConv = null;
-
-            // Optional: extern ( stdcall )
-            if (Match(TokenKind.LParen))
-            {
-                if (Check(TokenKind.Identifier))
-                    callConv = Eat(TokenKind.Identifier).Lexeme.ToLowerInvariant();
-                Eat(TokenKind.RParen);
-            }
-
-            // extern "mylib.dll"
-            string dll = Eat(TokenKind.String).Lexeme[1..^1];
-
-            var ret = ParseTypeRef();
-            string name = Eat(TokenKind.Identifier).Lexeme;
-
-            Eat(TokenKind.LParen);
+            // function
             var ps = new List<ParamDecl>();
             if (!Check(TokenKind.RParen))
             {
@@ -181,18 +205,26 @@ public sealed class Parser
                     string pn = Eat(TokenKind.Identifier).Lexeme;
                     ps.Add(new ParamDecl(pt!, pn, 0));
                 } while (Match(TokenKind.Comma));
-
             }
             Eat(TokenKind.RParen);
-            Eat(TokenKind.Semicolon);
-            return new ExternFuncDecl(dll, ret!, name, ps, null, callConv, 0);
+            var body = ParseCompoundStmt();
+            return new FuncDef(type!, name, ps, body, 0);
         }
-        if (Check(TokenKind.Typedef))
-        {
-            return ParseTypedefDecl();
-        }
+        return null;
+    }
 
-        // 'struct Tag;' (opaque/forward)
+    private Decl ParseNonDllExternalOrRegularDecl()
+    {
+        // This mirrors the body of ParseExternalDeclaration AFTER the initial extern handling.
+        // i.e., from your existing code starting at:
+        //   if (Check(TokenKind.Typedef)) ...
+        //   if (Check(TokenKind.Struct) && LA(1)...)
+        //   { var type = ParseTypeRef(); string name = Eat(Identifier) ... }
+        // Return the Decl you would normally return there.
+        // (You can extract that code into this helper, and let the original method call it too.)
+
+        if (Check(TokenKind.Typedef)) return ParseTypedefDecl();
+
         if (Check(TokenKind.Struct) && LA(1).Kind == TokenKind.Identifier && LA(2).Kind == TokenKind.Semicolon)
         {
             Eat(TokenKind.Struct);
@@ -202,30 +234,136 @@ public sealed class Parser
             return new OpaqueStructDecl(tag, 0);
         }
 
-        {
-            var type = ParseTypeRef();
-            string name = Eat(TokenKind.Identifier).Lexeme;
+        var type = ParseTypeRef();
+        string name = Eat(TokenKind.Identifier).Lexeme;
 
+        if (Match(TokenKind.LParen))
+        {
+            var ps = new List<ParamDecl>();
+            if (!Check(TokenKind.RParen))
+            {
+                do
+                {
+                    var pt = ParseTypeRef();
+                    string pn = Eat(TokenKind.Identifier).Lexeme;
+                    ps.Add(new ParamDecl(pt!, pn, 0));
+                } while (Match(TokenKind.Comma));
+            }
+            Eat(TokenKind.RParen);
+            var body = ParseCompoundStmt();
+            return new FuncDef(type!, name, ps, body, 0);
+        }
+        else
+        {
+            var decls = new List<VarDecl>();
+            Expr? init = null;
+            if (Match(TokenKind.Assign))
+                init = ParseAssignment();
+            decls.Add(new VarDecl(type!, name, init, 0));
+            while (Match(TokenKind.Comma))
+            {
+                string n = Eat(TokenKind.Identifier).Lexeme;
+                Expr? i = null;
+                if (Match(TokenKind.Assign)) i = ParseAssignment();
+                decls.Add(new VarDecl(type!, n, i, 0));
+            }
+            Eat(TokenKind.Semicolon);
+            return decls[0]; // (same note as your current code)
+        }
+    }
+
+    private Decl ParseExternalDeclaration()
+    {
+        if (Match(TokenKind.Extern))
+        {
+            // extern "C" <decl>;  → wrap the one decl in a LinkageGroup
+            if (Check(TokenKind.String) && IsLinkageString(LA(0)))
+            {
+                var langTok = Consume(); // "C" or "C++"
+
+                // Optional stray semicolon: extern "C";
+                if (Match(TokenKind.Semicolon))
+                    return new LinkageGroup(langTok.Unquote(), new List<Decl>(), langTok.Start);
+
+                // Parse exactly one declaration in this linkage
+                // We reuse your normal decl parsing without treating it as a DLL import.
+                var mark = Mark();
+                var decl = ParseNonDllExternalOrRegularDecl(); // (see helper below)
+                return new LinkageGroup(langTok.Unquote(), new List<Decl> { decl }, langTok.Start);
+            }
+
+            // --- existing DLL-import path remains unchanged ---
+            string? callConv = null;
+            if (Check(TokenKind.Identifier))
+                callConv = Eat(TokenKind.Identifier).Lexeme.ToLowerInvariant();
+            Eat(TokenKind.RParen);
+                
             if (Match(TokenKind.LParen))
             {
-                // function
-                var ps = new List<ParamDecl>();
-                if (!Check(TokenKind.RParen))
-                {
-                    do
-                    {
-                        var pt = ParseTypeRef();
-                        string pn = Eat(TokenKind.Identifier).Lexeme;
-                        ps.Add(new ParamDecl(pt!, pn, 0));
-                    } while (Match(TokenKind.Comma));
-                }
+                if (Check(TokenKind.Identifier))
+                    callConv = Eat(TokenKind.Identifier).Lexeme.ToLowerInvariant();
                 Eat(TokenKind.RParen);
-                var body = ParseCompoundStmt();
-                return new FuncDef(type!, name, ps, body, 0);
+            }
+
+            // If the next string is NOT "C"/"C++", treat as DLL name (your existing behavior)
+            string dll = Eat(TokenKind.String).Unquote();
+            var func = ParseFuncDef()!;
+            return new ExternFuncDecl(dll, null, callConv, func, 0);
+        }
+
+        if (Check(TokenKind.Typedef))
+        {
+            return ParseTypedefDecl();
+        }
+
+        // 'struct Tag;' (opaque/forward)
+        if (Check(TokenKind.Struct) && LA(1).Kind == TokenKind.Identifier)
+        {
+            Eat(TokenKind.Struct);
+            string tag = Eat(TokenKind.Identifier).Lexeme;
+
+            // struct Tag;
+            if (Match(TokenKind.Semicolon))
+            {
+                _structTags.Add(tag);
+                return new OpaqueStructDecl(tag, 0);
+            }
+
+            // struct Tag { ... };
+            if (Match(TokenKind.LBrace))
+            {
+                var fields = new List<StructField>();
+
+                while (!Check(TokenKind.RBrace))
+                {
+                    var fieldType = ParseTypeRef();
+                    string fieldName = Eat(TokenKind.Identifier).Lexeme;
+                    Eat(TokenKind.Semicolon);
+
+                    fields.Add(new StructField(fieldType!, fieldName, 0));
+                }
+
+                Eat(TokenKind.RBrace);
+                Eat(TokenKind.Semicolon);
+
+                _structTags.Add(tag); // allow use of 'struct tag' later
+                return new StructDecl(tag, fields, 0);
+            }
+        }
+
+        {
+            var mark = Mark();
+            var func = ParseFuncDef();
+            if (func != null)
+            {
+                return func;
             }
             else
             {
-                // global var decl (possibly with init); allow comma list
+                Reset(mark);
+                var type = ParseTypeRef();
+                string name = Eat(TokenKind.Identifier).Lexeme;
+
                 var decls = new List<VarDecl>();
                 Expr? init = null;
                 if (Match(TokenKind.Assign))
@@ -243,6 +381,7 @@ public sealed class Parser
                 return decls[0];
             }
         }
+        
     }
 
     private IfStmt ParseIfStatement()
@@ -479,7 +618,7 @@ public sealed class Parser
         if (Check(TokenKind.String))
         {
             var t = Consume();
-            return new StringExpr(t.Lexeme[1..^1], t.Start);
+            return new StringExpr(t.Unquote(), t.Start);
         }
         if (Check(TokenKind.IntLiteral))
         {

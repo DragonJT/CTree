@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace MiniC;
 
 public enum TokenKind
@@ -15,7 +17,12 @@ public enum TokenKind
     Extern, String,
     Null,
     Typedef, Struct, DirectiveHash,
-    Define, Undef, Include, Ifdef, Ifndef, Elif, Endif
+    
+}
+
+public enum PpTokenKind
+{
+    Other, If, Else, Define, Undef, Include, Ifdef, Ifndef, Elif, Endif
 }
 
 public enum TriviaKind { Space, Newline, LineComment, BlockComment }
@@ -31,6 +38,7 @@ public readonly struct Trivia
 public class Token
 {
     public TokenKind Kind { get; }
+    public PpTokenKind PpKind { get; }
     public readonly Lexer Source;
     public int Start { get; }
     public int Length { get; }
@@ -60,13 +68,31 @@ public class Token
         }
     }
 
-    public Token(TokenKind kind, Lexer source, int start, int length, ReadOnlyMemory<Trivia> leading)
-    { Kind = kind; Source = source; Start = start; Length = length; Leading = leading; }
+    public Token(TokenKind kind, Lexer source, int start, int length, ReadOnlyMemory<Trivia> leading, PpTokenKind ppKind)
+    { Kind = kind; Source = source; Start = start; Length = length; Leading = leading; PpKind = ppKind; }
+
+    public void ToCode(StringBuilder sb)
+    {
+        var span = Leading.Span;
+
+        for (int i = 0; i < span.Length; i++)
+        {
+            var tr = span[i];
+            sb.Append(Source.Src, tr.Start, tr.Length);
+        }
+        sb.Append(Lexeme);
+    }
+
+    public string Unquote()
+    {
+        var s = Lexeme;
+        return s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1] : s;
+    }
 
     public override string ToString()
     {
         var (line, col) = LineCol;
-        return $"({Kind}:{Lexeme}:{line}:{col})"; 
+        return $"({Kind}:{Lexeme}:{line}:{col})";
     }
 }
 
@@ -181,12 +207,12 @@ public sealed class Lexer
         return Create(TokenKind.IntLiteral, start, _i - start, leading);
     }
     
-    Token Create(TokenKind kind, int start, int length, List<Trivia> leading)
+    Token Create(TokenKind kind, int start, int length, List<Trivia> leading, PpTokenKind ppKind = PpTokenKind.Other)
     {
-        return new(kind, this, start, length, leading.ToArray());
+        return new(kind, this, start, length, leading.ToArray(), ppKind);
     }
 
-    public Token NextToken(Dictionary<string, TokenKind> keywords)
+    public Token NextToken()
     {
         var leading = new List<Trivia>(capacity: 2);
         CollectLeadingTrivia(leading);
@@ -245,11 +271,37 @@ public sealed class Lexer
         {
             while (char.IsLetterOrDigit(Peek()) || Peek() == '_') Next();
             string id = Src.Substring(start, _i - start);
-            if (keywords.TryGetValue(id, out var tokenKind))
+
+            var kw = id switch
             {
-                return Create(tokenKind, start, id.Length, leading);
-            }
-            return Create(TokenKind.Identifier, start, id.Length, leading);
+                "extern" => TokenKind.Extern,
+                "return" => TokenKind.Return,
+                "if" => TokenKind.If,
+                "else" => TokenKind.Else,
+                "while" => TokenKind.While,
+                "for" => TokenKind.For,
+                "break" => TokenKind.Break,
+                "continue" => TokenKind.Continue,
+                "NULL" => TokenKind.Null,
+                "typedef" => TokenKind.Typedef,
+                "struct" => TokenKind.Struct,
+                _ => TokenKind.Identifier,
+            };
+
+            var ppKw = id switch
+            {
+                "define" => PpTokenKind.Define,
+                "undef" => PpTokenKind.Undef,
+                "include" => PpTokenKind.Include,
+                "if" => PpTokenKind.If,
+                "ifdef" => PpTokenKind.Ifdef,
+                "ifndef" => PpTokenKind.Ifndef,
+                "elif" => PpTokenKind.Elif,
+                "else" => PpTokenKind.Else,
+                "endif" => PpTokenKind.Endif,
+                _ => PpTokenKind.Other,
+            };
+            return Create(kw, start, id.Length, leading, ppKw);
         }
 
         throw new Exception($"Unexpected character '{c}' at {start}");

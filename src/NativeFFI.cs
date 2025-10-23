@@ -97,12 +97,12 @@ public sealed class FfiBinder
     {
         // Load the DLL (cross-platform)
         IntPtr h = NativeLibrary.Load(d.DllName);
-        string entry = d.EntryPoint ?? d.Name;
+        string entry = d.EntryPoint ?? d.Func.Name;
 
         // Get function pointer
         IntPtr p = NativeLibrary.GetExport(h, entry);
 
-        (Type ret, Type[] args) = MapSignature(d.RetType, d.Params);
+        (Type ret, Type[] args) = MapSignature(d.Func.RetType, d.Func.Params);
 
         var cc = d.CallConv?.ToLowerInvariant() switch
         {

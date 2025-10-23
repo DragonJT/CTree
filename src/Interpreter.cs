@@ -230,7 +230,7 @@ namespace MiniC
                         _fns.Add(f);
                         break;
                     case ExternFuncDecl e:
-                        _native[e.Name] = FfiBinder.Bind(e);
+                        _native[e.Func.Name] = FfiBinder.Bind(e);
                         break;
                 }
             }

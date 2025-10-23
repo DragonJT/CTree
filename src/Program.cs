@@ -1,6 +1,4 @@
-﻿using System.ComponentModel;
-using System.Diagnostics;
-
+﻿
 namespace MiniC;
 
 public sealed class SourceTable
@@ -13,43 +11,36 @@ public sealed class SourceTable
     }
 }
 
-public sealed class LexerReader
+
+public sealed class LexerReader : ITokenReader
 {
-    private readonly SourceTable _sources;
-    private readonly int _lexerID = 0;
-    private readonly Dictionary<string, TokenKind> _keywords = [];
-    private readonly Dictionary<string, TokenKind> _ppKeywords = [];
-    private bool isPP = true;
+    private readonly IReadOnlyList<Token> _tokens;
+    int index = 0;
 
-    public LexerReader(SourceTable sources)
+    public LexerReader(IReadOnlyList<Token> tokens)
     {
-        _keywords.Add("extern", TokenKind.Extern);
-        _keywords.Add("return", TokenKind.Return);
-        _keywords.Add("if", TokenKind.If);
-        _keywords.Add("else", TokenKind.Else);
-        _keywords.Add("while", TokenKind.While);
-        _keywords.Add("for", TokenKind.For);
-        _keywords.Add("break", TokenKind.Break);
-        _keywords.Add("continue", TokenKind.Continue);
-        _keywords.Add("NULL", TokenKind.Null);
-        _keywords.Add("typedef", TokenKind.Typedef);
-        _keywords.Add("struct", TokenKind.Struct);
-
-        _ppKeywords.Add("define", TokenKind.Define);
-        _ppKeywords.Add("undef", TokenKind.Undef);
-        _ppKeywords.Add("include", TokenKind.Include);
-        _ppKeywords.Add("if", TokenKind.If);
-        _ppKeywords.Add("ifdef", TokenKind.Ifdef);
-        _ppKeywords.Add("ifndef", TokenKind.Ifndef);
-        _ppKeywords.Add("elif", TokenKind.Elif);
-        _ppKeywords.Add("else", TokenKind.Else);
-        _ppKeywords.Add("endif", TokenKind.Endif);
-        _sources = sources; 
+        _tokens = tokens;
     }
 
     public Token NextToken()
     {
-        return _sources.lexers[_lexerID].NextToken(isPP ? _ppKeywords : _keywords);
+        return _tokens[index++];
+    }
+}
+
+public sealed class PpLexerReader : ITokenReader
+{
+    private readonly SourceTable _sources;
+    private readonly int _lexerID = 0;
+
+    public PpLexerReader(SourceTable sources)
+    {
+        _sources = sources;
+    }
+
+    public Token NextToken()
+    {
+        return _sources.lexers[_lexerID].NextToken();
     }
 }
 
@@ -62,10 +53,19 @@ static class Program
         sources.Add("glad.h");
         //sources.Add("main.c");
 
-        var ppParser = new PpParser(new LexerReader(sources));
+        var ppParser = new PpParser(new PpLexerReader(sources));
         var ppTranslationUnit = ppParser.Parse();
-        PpAstPrinter.DumpToConsole(ppTranslationUnit, false, false);
 
+        var env = new MacroEnv();
+        var collector = new MacroCollector(env);
+        collector.Visit(ppTranslationUnit);
+
+        var projector = new PpProjector(env);
+        var expandedTokens = projector.Project(ppTranslationUnit);
+
+        var parser = new Parser(new LexerReader(expandedTokens));
+        var tu = parser.ParseTranslationUnit();
+        Console.WriteLine(AstPrinter.Dump(tu));
         /*var tu = parser.ParseTranslationUnit();
         var interp = new Interpreter();
         var result = interp.Run(tu);

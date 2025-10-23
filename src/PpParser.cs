@@ -50,14 +50,32 @@ public sealed record PpSimpleDirective(
     IReadOnlyList<Token> RestOfLine
 ) : PpGroupPart;
 
+public abstract record Macro(string Name);
+
+public sealed record ObjectMacro(
+    string Name,
+    IReadOnlyList<Token> Replacement // raw tokens captured from #define line
+) : Macro(Name);
+
+public sealed record FunctionMacro(
+    string Name,
+    IReadOnlyList<string> Parameters,
+    bool IsVariadic,
+    IReadOnlyList<Token> Replacement
+) : Macro(Name);
+
+public interface ITokenReader
+{
+    public Token NextToken();
+}
 
 public sealed class PpParser
 {
-    private readonly LexerReader _reader;
+    private readonly ITokenReader _reader;
     private readonly List<Token> _buf = new();
     private int _idx;
 
-    public PpParser(LexerReader reader)
+    public PpParser(ITokenReader reader)
     {
         _reader = reader;
     }
@@ -96,20 +114,20 @@ public sealed class PpParser
     private static bool AreAdjacent(Token a, Token b) =>
         ReferenceEquals(a.Source, b.Source) && (a.Start + a.Length == b.Start);
 
-    private bool PeekDirective(TokenKind kw)
+    private bool PeekDirective(PpTokenKind kw)
     {
         int m = Mark();
         if (!Check(TokenKind.DirectiveHash)) { Reset(m); return false; }
         Consume(); // '#'
-        var ok = LA(0).Kind == kw;
+        var ok = LA(0).PpKind == kw;
         Reset(m);
         return ok;
     }
 
-    private Token ConsumeDirective(TokenKind kw)
+    private Token ConsumeDirective(PpTokenKind kw)
     {
         Eat(TokenKind.DirectiveHash);
-        if (LA(0).Kind != kw)
+        if (LA(0).PpKind != kw)
             throw new Exception($"PP: expected #{kw} but saw #{LA(0)}");
         return Consume();
     }
@@ -130,7 +148,7 @@ public sealed class PpParser
     }
 
     // Read a group (sequence of parts) until we hit an elif/else/endif (caller decides which)
-    private ImmutableArray<PpGroupPart> ParseGroupUntil(params TokenKind[] terminators)
+    private ImmutableArray<PpGroupPart> ParseGroupUntil(params PpTokenKind[] terminators)
     {
         var parts = ImmutableArray.CreateBuilder<PpGroupPart>();
 
@@ -141,7 +159,7 @@ public sealed class PpParser
                 // Look ahead to see keyword
                 int m = Mark();
                 Consume(); // '#'
-                TokenKind kw = LA(0).Kind;
+                PpTokenKind kw = LA(0).PpKind;
                 Reset(m);
 
                 // stop at a terminator (but do not consume it)
@@ -195,18 +213,18 @@ public sealed class PpParser
         var id = LA(0);
         Consume();
 
-        return id.Kind switch
+        return id.PpKind switch
         {
-            TokenKind.Include => ParseInclude(),
-            TokenKind.Define  => ParseDefine(),
-            TokenKind.Undef   => ParseUndef(),
-            TokenKind.If      => ParseIfSection(PpConditionKind.If),
-            TokenKind.Ifdef   => ParseIfSection(PpConditionKind.Ifdef),
-            TokenKind.Ifndef  => ParseIfSection(PpConditionKind.Ifndef),
-            TokenKind.Elif    => throw new Exception("#elif without matching #if"),
-            TokenKind.Else    => throw new Exception("#else without matching #if"),
-            TokenKind.Endif   => throw new Exception("#endif without matching #if"),
-            _         => new PpSimpleDirective(id.Kind, CollectRestOfLine())
+            PpTokenKind.Include => ParseInclude(),
+            PpTokenKind.Define => ParseDefine(),
+            PpTokenKind.Undef => ParseUndef(),
+            PpTokenKind.If => ParseIfSection(PpConditionKind.If),
+            PpTokenKind.Ifdef => ParseIfSection(PpConditionKind.Ifdef),
+            PpTokenKind.Ifndef => ParseIfSection(PpConditionKind.Ifndef),
+            PpTokenKind.Elif => throw new Exception("#elif without matching #if"),
+            PpTokenKind.Else => throw new Exception("#else without matching #if"),
+            PpTokenKind.Endif => throw new Exception("#endif without matching #if"),
+            _ => new PpSimpleDirective(id.Kind, CollectRestOfLine())
         };
     }
 
@@ -272,13 +290,7 @@ public sealed class PpParser
         // replacement list: raw tokens until end-of-line
         var repl = CollectRestOfLine();
 
-        return new PpDefineDirective(
-            name,
-            fnLike,
-            parameters.ToImmutable(),
-            variadic,
-            repl
-        );
+        return new PpDefineDirective(name, fnLike, parameters.ToImmutable(), variadic, repl);
     }
 
     private bool TryConsumeEllipsis(out Token? firstDot)
@@ -306,31 +318,31 @@ public sealed class PpParser
     private PpIfSection ParseIfSection(PpConditionKind kind)
     {
         var cond = CollectRestOfLine();
-        var ifLike = new PpIfLike(kind, cond, ParseGroupUntil(TokenKind.Elif, TokenKind.Else, TokenKind.Endif));
+        var ifLike = new PpIfLike(kind, cond, ParseGroupUntil(PpTokenKind.Elif, PpTokenKind.Else, PpTokenKind.Endif));
 
         var elifs = ImmutableArray.CreateBuilder<PpElif>();
         PpElse? els = null;
 
         // zero or more #elif
-        while (PeekDirective(TokenKind.Elif))
+        while (PeekDirective(PpTokenKind.Elif))
         {
-            ConsumeDirective(TokenKind.Elif);
+            ConsumeDirective(PpTokenKind.Elif);
             var c = CollectRestOfLine();
-            var body = ParseGroupUntil(TokenKind.Elif, TokenKind.Else, TokenKind.Endif);
+            var body = ParseGroupUntil(PpTokenKind.Elif, PpTokenKind.Else, PpTokenKind.Endif);
             elifs.Add(new PpElif(c, body));
         }
 
         // optional #else
-        if (PeekDirective(TokenKind.Else))
+        if (PeekDirective(PpTokenKind.Else))
         {
-            ConsumeDirective(TokenKind.Else);
+            ConsumeDirective(PpTokenKind.Else);
             CollectRestOfLine(); // ignore anything to EOL
-            var body = ParseGroupUntil(TokenKind.Endif);
+            var body = ParseGroupUntil(PpTokenKind.Endif);
             els = new PpElse(body);
         }
 
         // mandatory #endif
-        ConsumeDirective(TokenKind.Endif);
+        ConsumeDirective(PpTokenKind.Endif);
         CollectRestOfLine();
 
         return new PpIfSection(ifLike, elifs.ToImmutable(), els);
