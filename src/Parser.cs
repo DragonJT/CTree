@@ -61,7 +61,11 @@ public sealed class Parser
     private readonly List<Token> _buf = new(); // tokens we’ve fetched
     private int _idx = 0;                      // index of "current" token in _buf
     private readonly HashSet<string> _typedefs =
-        new HashSet<string>(StringComparer.Ordinal) { "int", "char", "float", "double", "long", "void", "unsigned int", "unsigned char"};
+        new HashSet<string>(StringComparer.Ordinal) {
+            "int", "char", "float", "double", "long", "void", "unsigned int", "unsigned char", "unsigned short",
+            "khronos_int8_t", "khronos_uint8_t", "khronos_int16_t", "khronos_int16_t", "khronos_int32_t", "khronos_float_t",
+            "khronos_int32_t", "khronos_intptr_t", "khronos_ssize_t", "khronos_int64_t", "khronos_uint64_t", "khronos_uint16_t"
+        };
 
     private readonly HashSet<string> _structTags = new(StringComparer.Ordinal);
 
@@ -135,6 +139,7 @@ public sealed class Parser
 
     private TypeRef? ParseTypeRef()
     {
+        int mark = Mark();
         string name;
         bool isStruct = false;
         if (Match(TokenKind.Struct))
@@ -147,14 +152,16 @@ public sealed class Parser
             bool unsigned = Match(TokenKind.Unsigned);
             if (Check(TokenKind.Identifier))
             {
-                name = unsigned ? "unsigned " : "" + Consume().Lexeme;
+                name = (unsigned ? "unsigned " : "") + Consume().Lexeme;
                 if (!(_typedefs.Contains(name) || _structTags.Contains(name)))
                 {
+                    Reset(mark);
                     return null;
                 }
             }
             else
             {
+                Reset(mark);
                 return null;
             }
         }
@@ -169,7 +176,6 @@ public sealed class Parser
     {
         Eat(TokenKind.Typedef);
 
-        // return type (may include trailing '*', e.g., 'void*')
         SkipConst();
         var retType = ParseTypeRef()!;
 
@@ -199,7 +205,6 @@ public sealed class Parser
             return new TypedefDecl(fptr, typedefName, 0);
         }
 
-        // Fallback: normal typedef  e.g., typedef int MYINT;
         string newName = Eat(TokenKind.Identifier).Lexeme;
         Eat(TokenKind.Semicolon);
         _typedefs.Add(newName);
@@ -248,9 +253,7 @@ public sealed class Parser
                 {
                     do
                     {
-                        var pt = ParseTypeRef();
-                        string pn = Eat(TokenKind.Identifier).Lexeme;
-                        ps.Add(new ParamDecl(pt!, pn, 0));
+                        ps.Add(ParseParamDecl());
                     } while (Match(TokenKind.Comma));
                 }
                 else
@@ -353,15 +356,7 @@ public sealed class Parser
                 if (Match(TokenKind.Assign))
                     init = ParseAssignment();
                 decls.Add(new VarDecl(type!, name, init, 0));
-                while (Match(TokenKind.Comma))
-                {
-                    string n = Eat(TokenKind.Identifier).Lexeme;
-                    Expr? i = null;
-                    if (Match(TokenKind.Assign)) i = ParseAssignment();
-                    decls.Add(new VarDecl(type!, n, i, 0));
-                }
                 Eat(TokenKind.Semicolon);
-                // For simplicity return just the first; in practice, split into separate Decl entries.
                 return decls[0];
             }
         }
