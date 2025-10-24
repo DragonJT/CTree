@@ -71,21 +71,19 @@ public interface ITokenReader
 
 public sealed class PpParser
 {
-    private readonly ITokenReader _reader;
-    private readonly List<Token> _buf = new();
+    private readonly List<Token> _tokens ;
     private int _idx;
 
-    public PpParser(ITokenReader reader)
+    public PpParser(List<Token> tokens)
     {
-        _reader = reader;
+        _tokens = tokens;
     }
 
     // ---------------- core lookahead/consume ----------------
 
     private Token LA(int k = 0)
     {
-        while (_idx + k >= _buf.Count) _buf.Add(_reader.NextToken());
-        return _buf[_idx + k];
+        return _tokens[_idx + k];
     }
 
     private Token Consume() { var t = LA(0); _idx++; return t; }

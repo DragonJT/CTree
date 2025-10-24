@@ -1,5 +1,4 @@
 ﻿
-using System.Text;
 
 namespace MiniC;
 
@@ -11,38 +10,19 @@ public sealed class SourceTable
     {
         lexers.Add(new(file));
     }
-}
 
-
-public sealed class LexerReader : ITokenReader
-{
-    private readonly IReadOnlyList<Token> _tokens;
-    int index = 0;
-
-    public LexerReader(IReadOnlyList<Token> tokens)
+    public List<Token> GetTokens()
     {
-        _tokens = tokens;
-    }
-
-    public Token NextToken()
-    {
-        return _tokens[index++];
-    }
-}
-
-public sealed class PpLexerReader : ITokenReader
-{
-    private readonly SourceTable _sources;
-    private readonly int _lexerID = 0;
-
-    public PpLexerReader(SourceTable sources)
-    {
-        _sources = sources;
-    }
-
-    public Token NextToken()
-    {
-        return _sources.lexers[_lexerID].NextToken();
+        List<Token> tokens = [];
+        while (true)
+        {
+            var token = lexers[0].NextToken();
+            tokens.Add(token);
+            if(token.Kind == TokenKind.EOF)
+            {
+                return tokens;
+            }
+        }
     }
 }
 
@@ -55,7 +35,7 @@ static class Program
         sources.Add("glad.h");
         //sources.Add("main.c");
 
-        var ppParser = new PpParser(new PpLexerReader(sources));
+        var ppParser = new PpParser(sources.GetTokens());
         var ppTranslationUnit = ppParser.Parse();
 
         var env = new MacroEnv();
@@ -64,20 +44,10 @@ static class Program
 
         var projector = new PpProjector(env);
         var expandedTokens = projector.Project(ppTranslationUnit);
-
-        StringBuilder builder = new();
-        foreach (var t in expandedTokens)
-        {
-            t.ToCode(builder);
-        }
-        File.WriteAllText("expanded.c", builder.ToString());
-        var parser = new Parser(new LexerReader(expandedTokens));
-        var tu = parser.ParseTranslationUnit();
-        Console.WriteLine(AstPrinter.Dump(tu));
-        /*var tu = parser.ParseTranslationUnit();
-        var interp = new Interpreter();
-        var result = interp.Run(tu);
-        Console.WriteLine($"exit code: {result}");
-        Console.WriteLine(MiniC.AstPrinter.Dump(tu));*/
+        var tu = Parser.Parse(expandedTokens);
+        var csEmitter = new CsEmitter(new EmitterConfig());
+        var csOutput = csEmitter.Emit(tu);
+        File.WriteAllText("file.cs", csOutput);
+        //Console.WriteLine(AstPrinter.Dump(tu));
     }
 }

@@ -181,7 +181,7 @@ public sealed class PpProjector : PpWalker
         _expander = new MacroExpander(env);
     }
 
-    public IReadOnlyList<Token> Project(PpTranslationUnit tu)
+    public List<Token> Project(PpTranslationUnit tu)
     {
         Visit(tu);
         return _out;

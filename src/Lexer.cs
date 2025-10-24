@@ -16,7 +16,8 @@ public enum TokenKind
     Break, Continue,
     Extern, String,
     Null,
-    Typedef, Struct, DirectiveHash, Const, Attribute, Unsigned
+    Const, Volatile, Restrict,
+    Typedef, Struct, DirectiveHash, Attribute, Unsigned
 }
 
 public enum PpTokenKind
@@ -285,6 +286,8 @@ public sealed class Lexer
                 "typedef" => TokenKind.Typedef,
                 "struct" => TokenKind.Struct,
                 "const" => TokenKind.Const,
+                "volatile" => TokenKind.Volatile,
+                "restrict" => TokenKind.Restrict,
                 "unsigned" => TokenKind.Unsigned,
                 "__attribute__" => TokenKind.Attribute,
                 _ => TokenKind.Identifier,

@@ -1,6 +1,4 @@
 
-using System.Runtime.CompilerServices;
-
 namespace MiniC;
 
 
@@ -36,6 +34,7 @@ public record FuncDef(Attribute Attribute, bool Extern, TypeRefBase RetType, str
 public record TranslationUnit(List<Decl> Decls, int P) : Node(P);
 public record TypedefDecl(TypeRefBase Type, string Name, int P) : Decl(P);
 public record StructField(TypeRefBase Type, string Name, int P) : Node(P);
+public record LinkageGroup(string Lang, List<Decl> Decls, int P) : Decl(P);
 
 public record StructDecl(Attribute Attribute, bool Extern, string Name, string? Name2, List<StructField>? Fields, int P) : Decl(P)
 {
@@ -57,8 +56,7 @@ public sealed record FuncPtrTypeRef(TypeRef ReturnType, List<ParamDecl> Params, 
 
 public sealed class Parser
 {
-    private readonly LexerReader _reader;
-    private readonly List<Token> _buf = new(); // tokens we’ve fetched
+    private readonly List<Token> _tokens; 
     private int _idx = 0;                      // index of "current" token in _buf
     private readonly HashSet<string> _typedefs =
         new HashSet<string>(StringComparer.Ordinal) {
@@ -69,14 +67,19 @@ public sealed class Parser
 
     private readonly HashSet<string> _structTags = new(StringComparer.Ordinal);
 
-    public Parser(LexerReader reader) { _reader = reader; }
+    private bool InBounds => _idx < _tokens.Count;
 
+    Parser(List<Token> tokens) { _tokens = tokens; }
+
+    public static TranslationUnit Parse(List<Token> tokens)
+    {
+        return new Parser(tokens).ParseTranslationUnit();
+    }
+    
     // LookAhead: get token k steps ahead without consuming (LA(0) == current)
     private Token LA(int k = 0)
     {
-        while (_idx + k >= _buf.Count)
-            _buf.Add(_reader.NextToken());
-        return _buf[_idx + k];
+        return _tokens[_idx + k];
     }
 
     // Consume: return current token and advance
@@ -126,15 +129,54 @@ public sealed class Parser
             name = Eat(TokenKind.Identifier).Lexeme;
         return new ParamDecl(t!, name, 0);
     }
+
+    private List<ParamDecl> ParseParamDecls()
+    {
+        if (Check(TokenKind.RParen))
+        {
+            return [];
+        }
+        if (Check(TokenKind.Identifier) && LA(0).Lexeme == "void" && LA(1).Kind == TokenKind.RParen)
+        {
+            Consume();
+            return [];
+        }
+        var ps = new List<ParamDecl>();
+        do
+        {
+            ps.Add(ParseParamDecl());
+        } while (Match(TokenKind.Comma));
+        return ps;
+    }
     
-    public TranslationUnit ParseTranslationUnit()
+    private TranslationUnit ParseTranslationUnit()
     {
         var decls = new List<Decl>();
-        while (!Check(TokenKind.EOF))
+        while (InBounds)
         {
             decls.Add(ParseExternalDeclaration());
         }
         return new TranslationUnit(decls, 0);
+    }
+
+    private static bool IsTypeQualifier(TokenKind k)
+        => k == TokenKind.Const || k == TokenKind.Volatile || k == TokenKind.Restrict;
+
+    private void SkipTypeQualifiers()
+    {
+        while (IsTypeQualifier(LA(0).Kind)) Consume();
+    }
+
+    private int ParsePointerChain() // returns how many '*' seen
+    {
+        int stars = 0;
+        while (Match(TokenKind.Star))
+        {
+            stars++;
+            // qualifiers may follow EACH star
+            SkipTypeQualifiers();
+        }
+        return stars;
     }
 
     private TypeRef? ParseTypeRef()
@@ -165,10 +207,7 @@ public sealed class Parser
                 return null;
             }
         }
-
-        int stars = 0;
-        while (Match(TokenKind.Star)) stars++;
-
+        int stars = ParsePointerChain();
         return new TypeRef(isStruct, name, stars);
     }
 
@@ -190,18 +229,12 @@ public sealed class Parser
             Eat(TokenKind.RParen);
 
             Eat(TokenKind.LParen);
-            var ps = new List<ParamDecl>();
-            if (!Check(TokenKind.RParen))
-            {
-                do
-                {
-                    ps.Add(ParseParamDecl());
-                } while (Match(TokenKind.Comma));
-            }
+            var ps = ParseParamDecls();
             Eat(TokenKind.RParen);
             Eat(TokenKind.Semicolon);
 
             var fptr = new FuncPtrTypeRef(retType, ps, ptrToFunc);
+            _typedefs.Add(typedefName);
             return new TypedefDecl(fptr, typedefName, 0);
         }
 
@@ -276,18 +309,45 @@ public sealed class Parser
         return null;
     }
 
+    private LinkageGroup? ParseExternGroupDecl()
+    {
+        if(LA(1).Kind == TokenKind.String)
+        {
+            var lang = LA(1).Unquote();
+            if (lang == "C" || lang == "C++")
+            {
+                Consume();
+                Consume();
+                if (Match(TokenKind.LBrace))
+                {
+                    var decls = new List<Decl>();
+                    while (!Match(TokenKind.RBrace))
+                    {
+                        decls.Add(ParseExternalDeclaration());
+                    }
+                    return new LinkageGroup(lang, decls, 0);
+                }
+                else if (Match(TokenKind.Semicolon))
+                {
+                    throw new Exception("Not implemented yet");
+                }
+                else
+                {
+                    throw new Exception();
+                }
+            }
+        }
+        return null;
+    }
+
     private Decl ParseExternalDeclaration()
     {
-        if(Check(TokenKind.Extern) && LA(1).Kind == TokenKind.String && (LA(1).Unquote()=="C" || LA(1).Unquote() == "C++"))
+        if (Check(TokenKind.Extern))
         {
-            Consume();
-            Consume();
-            if (Match(TokenKind.LBrace))
+            var externGroupDecl = ParseExternGroupDecl();
+            if(externGroupDecl != null)
             {
-                while(!Match(TokenKind.RBrace))
-                {
-                    ParseExternalDeclaration();
-                }
+                return externGroupDecl;
             }
         }
 
@@ -349,8 +409,11 @@ public sealed class Parser
             {
                 Reset(mark);
                 var type = ParseTypeRef();
+                if (type == null)
+                {
+                    throw new Exception(LA(0).ToString());
+                }
                 string name = Eat(TokenKind.Identifier).Lexeme;
-
                 var decls = new List<VarDecl>();
                 Expr? init = null;
                 if (Match(TokenKind.Assign))
@@ -360,7 +423,7 @@ public sealed class Parser
                 return decls[0];
             }
         }
-        
+
     }
 
     private IfStmt ParseIfStatement()

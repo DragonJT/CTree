@@ -51,6 +51,7 @@ namespace MiniC
 
             return n switch
             {
+                LinkageGroup eg => $"Extern '{eg.Lang}'",
                 TypedefDecl td => td.Type switch
                 {
                     FuncPtrTypeRef f => $"Typedef {td.Name}: {f}",
@@ -98,6 +99,11 @@ namespace MiniC
 
             switch (n)
             {
+                case LinkageGroup eg:
+                    for(int i=0;i<eg.Decls.Count;i++)
+                        list.Add(($"decls[{i}]", eg.Decls[i]));
+                    break;
+
                 case TranslationUnit tu:
                     for (int i = 0; i < tu.Decls.Count; i++)
                         list.Add(($"decls[{i}]", tu.Decls[i]));
