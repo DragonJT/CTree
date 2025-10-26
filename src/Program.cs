@@ -32,7 +32,7 @@ static class Program
     {
         // 1) Load files
         var sources = new SourceTable();
-        sources.Add("glad.h");
+        sources.Add("ccode/createwindow.c");
         //sources.Add("main.c");
 
         var ppParser = new PpParser(sources.GetTokens());
